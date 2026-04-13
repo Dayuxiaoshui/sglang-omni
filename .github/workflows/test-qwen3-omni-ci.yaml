@@ -72,6 +72,7 @@ jobs:
           pytest tests/test_model/test_qwen3_omni_tts_ci.py -v -s -x
         env:
           HF_ENDPOINT: https://hf-mirror.com
+          SGLANG_SEEDTTS_MINI_DIR: /github/home/seedtts-mini
 
       - name: Print TTS CI artifacts (speed + WER)
         if: always()
@@ -169,3 +170,4 @@ jobs:
         shell: bash
         run: |
           bash .github/scripts/delete_gpu_process.sh
+ma
