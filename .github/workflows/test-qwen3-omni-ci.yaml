@@ -47,8 +47,12 @@ jobs:
         if: always()
         shell: bash
         run: |
-          rm -rf /github/home/omni-qwen3
-          cp -p -r omni-qwen3 /github/home/
+          if omni-qwen3/bin/python -c "import torch" 2>/dev/null; then
+            rm -rf /github/home/omni-qwen3
+            cp -p -r omni-qwen3 /github/home/
+          else
+            echo "::warning::Skipping cache save — venv appears corrupted (torch not importable)"
+          fi
 
   stage-1-tts:
     name: stage 1 - TTS speed + WER

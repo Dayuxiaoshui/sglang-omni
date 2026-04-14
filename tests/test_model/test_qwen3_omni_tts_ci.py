@@ -212,7 +212,7 @@ def dataset_dir(tmp_path_factory: pytest.TempPathFactory) -> Path:
         root = Path(override_dir).expanduser()
     else:
         root = tmp_path_factory.mktemp("seed_tts_eval") / "data"
-    download_dataset(DATASETS["seedtts-mini"], str(root))
+    download_dataset(DATASETS["seedtts-mini"], str(root), quiet=True)
     return root
 
 
