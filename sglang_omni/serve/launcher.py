@@ -27,7 +27,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-import socket
 import time
 from typing import Any
 
@@ -45,22 +44,6 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 # Built-in pipeline registry
 # ---------------------------------------------------------------------------
-
-
-def _find_available_port(host: str, port: int) -> int:
-    """Return *port* if available, otherwise find a free port and warn."""
-    try:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.bind((host, port))
-            return port
-    except OSError:
-        pass
-    logger.warning(f"Port {port} is already in use on {host}.")
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind((host, 0))
-        free_port = s.getsockname()[1]
-    logger.warning(f"Using port {free_port} instead.")
-    return free_port
 
 
 def _default_run_id() -> str:
