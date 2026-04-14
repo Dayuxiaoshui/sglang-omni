@@ -26,12 +26,7 @@ from jiwer import process_words
 
 from benchmarks.tasks.voice_clone import load_asr_model, normalize_text, transcribe
 from sglang_omni.utils import find_available_port
-from tests.utils import (
-    disable_proxy,
-    no_proxy_env,
-    start_server_from_cmd,
-    stop_server,
-)
+from tests.utils import disable_proxy, no_proxy_env, start_server_from_cmd, stop_server
 
 MODEL_PATH = "Qwen/Qwen3-Omni-30B-A3B-Instruct"
 MODEL_NAME = "qwen3-omni"
