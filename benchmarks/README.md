@@ -77,14 +77,14 @@ generates + persists WAVs while the server runs, phase 2 transcribes offline
 to avoid GPU contention with the server. Use `--generate-only` or
 `--transcribe-only` to run a single phase.
 
-## Adding a New Model
+## Adding a New Model or Task
 
-- **Same API type** (e.g. another OAI-compatible TTS model): add an eval
-  script under `eval/` that reuses the existing task helpers in
-  `tasks/tts.py` (`make_tts_send_fn`, `run_seedtts_transcribe`, …).
-- **New API type**: add a task class in the relevant `tasks/*.py` file
-  (mirroring `VoiceCloneOmni` in `tasks/tts.py`) and wire it into a new
-  eval script.
+- **New model, same task/API type** (e.g. another OAI-compatible TTS model):
+  add an eval script under `eval/` that reuses the existing task helpers
+  in `tasks/tts.py` (`make_tts_send_fn`, `run_seedtts_transcribe`, …).
+- **New task or API type**: add a task class in the relevant `tasks/*.py`
+  file (mirroring `VoiceCloneOmni` in `tasks/tts.py`), expose metric
+  helpers, and wire it into a new eval script.
 
 ## Datasets
 
