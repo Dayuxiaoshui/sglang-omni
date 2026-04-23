@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import random
 import time
 from collections import defaultdict
 from typing import Any
@@ -86,6 +87,7 @@ def compute_videomme_metrics(
     assert len(samples) == len(
         results
     ), f"Sample/result count mismatch: {len(samples)} samples vs {len(results)} results"
+    random.seed(42)
 
     correct = 0
     failed = 0
