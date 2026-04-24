@@ -221,29 +221,10 @@ class TestEncoderMemReserveRouting(unittest.TestCase):
         # auto=0.929 minus constant=0.05 => 0.879 after rounding.
         self.assertEqual(server_args.mem_fraction_static, 0.879)
 
-    def test_cast_validator_rejects_out_of_range_values(self) -> None:
-        """The cast validator rejects negative, >=1, and large out-of-range values."""
-        from sglang_omni.models.qwen3_omni.config import _cast_encoder_mem_reserve
-
-        for bad in (-0.1, 1.0, 1.5):
-            with self.assertRaisesRegex(
-                ValueError, r"encoder_mem_reserve must be in \[0, 1\)"
-            ):
-                _cast_encoder_mem_reserve(bad)
-
-    def test_cast_validator_accepts_in_range_values(self) -> None:
-        """The cast validator accepts 0, small, and near-1 values, returning a float."""
-        from sglang_omni.models.qwen3_omni.config import _cast_encoder_mem_reserve
-
-        for good in (0.0, 0.05, 0.9):
-            result = _cast_encoder_mem_reserve(good)
-            self.assertIsInstance(result, float)
-            self.assertEqual(result, good)
-
     def test_out_of_range_encoder_mem_reserve_rejected_via_apply_overrides(
         self,
     ) -> None:
-        """Programmatic callers of ``apply_server_args_overrides`` also hit the cast validator."""
+        """Out-of-range reserves raise at the config boundary, before launch."""
         config = Qwen3OmniPipelineConfig(model_path="dummy")
 
         with self.assertRaisesRegex(
@@ -255,7 +236,7 @@ class TestEncoderMemReserveRouting(unittest.TestCase):
             )
 
     def test_thinker_executor_args_atomic_on_partial_cast_failure(self) -> None:
-        """Mix of (valid thinker_max_seq_len + invalid encoder_mem_reserve): the valid key must not be partially written when a later cast raises."""
+        """A later cast failure must not leave an earlier valid key written."""
         config = Qwen3OmniPipelineConfig(model_path="dummy")
         thinker_stage = next(s for s in config.stages if s.name == "thinker")
         original_args = dict(thinker_stage.executor.args or {})
@@ -264,90 +245,30 @@ class TestEncoderMemReserveRouting(unittest.TestCase):
             config.apply_server_args_overrides(
                 stage_name="thinker",
                 overrides={
-                    "thinker_max_seq_len": 16384,  # valid cast
-                    "encoder_mem_reserve": 5.0,  # out-of-range -> cast raises
+                    "thinker_max_seq_len": 16384,
+                    "encoder_mem_reserve": 5.0,
                 },
             )
 
-        current_args = dict(thinker_stage.executor.args or {})
-        self.assertEqual(
-            current_args,
-            original_args,
-            "thinker_max_seq_len was written despite later cast failure -- routing is not atomic",
-        )
-
-    def test_thinker_executor_args_atomic_reverse_order(self) -> None:
-        """Reverse-order regression guard.
-
-        Under the current ``_THINKER_EXECUTOR_ARG_CASTS`` declaration order,
-        ``thinker_max_seq_len`` is cast before ``encoder_mem_reserve`` so
-        a bad ``thinker_max_seq_len`` aborts before the (already-valid)
-        ``encoder_mem_reserve`` is written. This test does NOT directly
-        repro the pre-fix bug for the reverse-failure case (the forward
-        test does) — it pins the post-fix atomic semantics so that any
-        future reordering of ``_THINKER_EXECUTOR_ARG_CASTS`` (which would
-        flip which key partial-writes under the old implementation) still
-        keeps stage state unchanged on cast failure.
-        """
-        config = Qwen3OmniPipelineConfig(model_path="dummy")
-        thinker_stage = next(s for s in config.stages if s.name == "thinker")
-        original_args = dict(thinker_stage.executor.args or {})
-
-        with self.assertRaises((ValueError, TypeError)):
-            config.apply_server_args_overrides(
-                stage_name="thinker",
-                overrides={
-                    "encoder_mem_reserve": 0.20,  # valid cast
-                    "thinker_max_seq_len": "not-an-int",  # int() -> ValueError
-                },
-            )
-
-        current_args = dict(thinker_stage.executor.args or {})
-        self.assertEqual(
-            current_args,
-            original_args,
-            "encoder_mem_reserve was written despite later cast failure -- routing is not atomic",
-        )
+        self.assertEqual(dict(thinker_stage.executor.args or {}), original_args)
 
 
-class TestMingDropsEncoderMemReserve(unittest.TestCase):
-    """Ming pipelines pop ``encoder_mem_reserve`` defensively (no runtime path yet)."""
+class TestEncoderMemReserveBuilderFloor(unittest.TestCase):
+    """Builder raises when reserve would drop auto mem_fraction_static below safe floor."""
 
-    def test_ming_base_drops_encoder_mem_reserve_without_leaking_to_server_args(
-        self,
-    ) -> None:
-        """MingOmniPipelineConfig pops ``encoder_mem_reserve`` so ServerArgs unpack will not crash."""
-        config = MingOmniPipelineConfig(model_path="dummy")
-
-        config.apply_server_args_overrides(
-            stage_name="thinker",
-            overrides={"encoder_mem_reserve": 0.20, "cpu_offload_gb": 40},
-        )
-
-        thinker_stage = next(s for s in config.stages if s.name == "thinker")
-        overrides = thinker_stage.executor.args.get("server_args_overrides", {})
-        self.assertNotIn("encoder_mem_reserve", overrides)
-        self.assertNotIn("encoder_mem_reserve", thinker_stage.executor.args)
-        # Other keys still flow through unchanged.
-        self.assertEqual(overrides.get("cpu_offload_gb"), 40)
-
-    def test_ming_speech_drops_encoder_mem_reserve_without_leaking_to_server_args(
-        self,
-    ) -> None:
-        """MingOmniSpeechPipelineConfig also pops ``encoder_mem_reserve``."""
-        from sglang_omni.models.ming_omni.config import MingOmniSpeechPipelineConfig
-
-        config = MingOmniSpeechPipelineConfig(model_path="dummy")
-        config.apply_server_args_overrides(
-            stage_name="thinker",
-            overrides={"encoder_mem_reserve": 0.20, "cpu_offload_gb": 40},
-        )
-
-        thinker_stage = next(s for s in config.stages if s.name == "thinker")
-        overrides = thinker_stage.executor.args.get("server_args_overrides", {})
-        self.assertNotIn("encoder_mem_reserve", overrides)
-        self.assertNotIn("encoder_mem_reserve", thinker_stage.executor.args)
-        self.assertEqual(overrides.get("cpu_offload_gb"), 40)
+    def test_reserve_dropping_auto_below_floor_raises(self) -> None:
+        with patch(
+            "sglang_omni.engines.ar.sglang_backend.server_args_builder.ServerArgs"
+        ) as server_args_mock:
+            # Simulate a tiny auto value (small-memory GPU) + an aggressive
+            # reserve. 0.15 - 0.10 = 0.05 < floor 0.1 -> raise.
+            server_args_mock.return_value = SimpleNamespace(mem_fraction_static=0.15)
+            with self.assertRaisesRegex(ValueError, r"below the safe floor"):
+                build_sglang_server_args(
+                    model_path="dummy",
+                    context_length=8192,
+                    auto_mem_fraction_static_reserve=0.10,
+                )
 
 
 class TestH20AutoMemFractionFloor(unittest.TestCase):

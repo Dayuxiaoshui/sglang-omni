@@ -7,19 +7,10 @@ from typing import Any
 from sglang.srt.server_args import ServerArgs
 
 # Default GPU-memory fraction reserved outside SGLang's KV-cache pool for
-# co-located vision/audio encoder weights and activations.
-#
-# Note (Ratish, Chenyang):
-# SGLang's VLM auto-sizing applies a dynamic 0.95 * factor reserve
-# (roughly [0.8, 1.05]); Qwen3-Omni nests vision/audio configs under
-# `thinker_config` so SGLang's VLM path never triggers for us. 0.05
-# is a conservative linear lower-bound of that dynamic reserve; we
-# subtract it after auto-sizing when the thinker GPU also hosts encoder
-# stages. User-pinned mem_fraction_static bypasses this reserve.
-#
-# For high-concurrency long-video workloads where encoder activations
-# dominate GPU memory, consider raising this reserve to 0.15-0.20 via
-# the per-stage CLI flag (e.g. `--encoder-mem-reserve`).
+# co-located vision/audio encoder weights and activations. SGLang's VLM
+# auto-sizing does not trigger for Qwen3-Omni (vision/audio configs are
+# nested under ``thinker_config``), so we subtract this after auto-sizing.
+# User-pinned ``mem_fraction_static`` bypasses this reserve entirely.
 OMNI_ENCODER_MEM_FRACTION_STATIC_RESERVE = 0.05
 
 
@@ -36,25 +27,11 @@ def build_sglang_server_args(
 ) -> ServerArgs:
     """Build ServerArgs with shared defaults for all SGLang AR engines.
 
-    Args:
-        model_path: Hugging Face model id or local path.
-        context_length: Maximum sequence length for SGLang's KV cache.
-        chunked_prefill_size: SGLang chunked prefill chunk size.
-        max_prefill_tokens: Max tokens in a single prefill batch.
-        max_running_requests: Max concurrent decode requests.
-        mem_fraction_static: Optional user-pinned mem_fraction_static. When
-            set, SGLang's auto-sizing is skipped and the encoder reserve
-            (see below) is also skipped.
-        auto_mem_fraction_static_reserve: GPU-memory fraction to subtract
-            from SGLang's auto-selected mem_fraction_static, reserving it
-            for co-located vision/audio encoder weights and activations.
-            Only applied when `mem_fraction_static` is None. Default (when
-            None) disables the reserve; callers that co-locate encoders on
-            the thinker GPU should pass
-            `OMNI_ENCODER_MEM_FRACTION_STATIC_RESERVE` (0.05) and surface a
-            CLI flag so users can raise it (0.15-0.20) for high-concurrency
-            long-video workloads.
-        **overrides: Raw SGLang ServerArgs kwargs forwarded verbatim.
+    When ``mem_fraction_static`` is ``None`` and
+    ``auto_mem_fraction_static_reserve`` is positive, the reserve is
+    subtracted from SGLang's auto-selected ``mem_fraction_static``. If
+    that would leave less than 0.01, we raise instead of silently
+    underfunding SGLang's KV pool.
     """
     kwargs: dict[str, Any] = {
         "model_path": model_path,
@@ -81,6 +58,9 @@ def build_sglang_server_args(
     return server_args
 
 
+_MIN_MEM_FRACTION_STATIC_AFTER_RESERVE = 0.1
+
+
 def _apply_auto_mem_fraction_static_reserve(
     server_args: ServerArgs,
     *,
@@ -88,7 +68,12 @@ def _apply_auto_mem_fraction_static_reserve(
     user_mem_fraction_static: float | None,
     reserve: float,
 ) -> None:
-    """Subtract a caller-requested reserve from SGLang's auto-selected value."""
+    """Subtract a caller-requested reserve from SGLang's auto-selected value.
+
+    Raises ``ValueError`` when the resulting ``mem_fraction_static`` would
+    fall below ``_MIN_MEM_FRACTION_STATIC_AFTER_RESERVE`` — otherwise SGLang
+    fails deep inside KV allocation with a confusing traceback.
+    """
     if not enabled or user_mem_fraction_static is not None:
         return
     if reserve <= 0:
@@ -97,4 +82,12 @@ def _apply_auto_mem_fraction_static_reserve(
     current = server_args.mem_fraction_static
     if current is None:
         return
-    server_args.mem_fraction_static = round(max(0.01, current - reserve), 3)
+    new_value = current - reserve
+    if new_value < _MIN_MEM_FRACTION_STATIC_AFTER_RESERVE:
+        raise ValueError(
+            f"auto mem_fraction_static {current:.3f} minus encoder_mem_reserve "
+            f"{reserve:.3f} = {new_value:.3f} is below the safe floor "
+            f"{_MIN_MEM_FRACTION_STATIC_AFTER_RESERVE}; lower encoder_mem_reserve "
+            f"or pin --mem-fraction-static explicitly."
+        )
+    server_args.mem_fraction_static = round(new_value, 3)

@@ -99,16 +99,19 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
 
+    if args.mem_fraction_static is not None and args.encoder_mem_reserve is not None:
+        raise ValueError(
+            "--mem-fraction-static and --encoder-mem-reserve are mutually "
+            "exclusive: a pinned --mem-fraction-static bypasses the auto "
+            "path the reserve subtracts from. Pass only one."
+        )
+
     overrides = {}
     if args.thinker_max_seq_len is not None:
         overrides["thinker_max_seq_len"] = args.thinker_max_seq_len
     if args.cpu_offload_gb:
         overrides["cpu_offload_gb"] = args.cpu_offload_gb
     if args.encoder_mem_reserve is not None:
-        # Range check lives in Qwen3OmniPipelineConfig._cast_encoder_mem_reserve
-        # so every entry point (this CLI, generic `sglang_omni.cli.serve`, and
-        # programmatic callers of `apply_server_args_overrides`) shares one
-        # validation boundary.
         overrides["encoder_mem_reserve"] = args.encoder_mem_reserve
 
     config = Qwen3OmniPipelineConfig(

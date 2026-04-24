@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import Any, ClassVar
 
 from sglang_omni.config import (
@@ -122,62 +121,38 @@ class Qwen3OmniPipelineConfig(PipelineConfig):
             )
 
 
-def _cast_encoder_mem_reserve(value: Any) -> float:
-    """Cast + validate ``encoder_mem_reserve`` at the config boundary.
-
-    Range ``[0, 1)`` is enforced here (not only at the CLI layer) so every
-    entry point -- the Qwen3 CLI, the generic ``sglang_omni.cli.serve``
-    dispatcher, and programmatic ``apply_server_args_overrides`` callers --
-    hits the same validator and fails early with a clear error, rather than
-    surfacing a confusing downstream SGLang error (e.g. negative
-    ``mem_fraction_static``) at server startup.
-    """
-    val = float(value)
-    if not 0.0 <= val < 1.0:
-        raise ValueError(f"encoder_mem_reserve must be in [0, 1), got {val}")
-    return val
-
-
-_THINKER_EXECUTOR_ARG_CASTS: dict[str, Callable[[Any], Any]] = {
-    "thinker_max_seq_len": int,
-    "encoder_mem_reserve": _cast_encoder_mem_reserve,
-}
-
-
 def _route_thinker_executor_args(
     stages: list[StageConfig],
     stage_name: str,
     overrides: dict[str, Any],
 ) -> dict[str, Any]:
-    """Route thinker-factory kwargs (not raw SGLang ServerArgs) to stage args.
+    """Pop thinker-factory kwargs onto the thinker stage; return the rest.
 
-    Keys in ``_THINKER_EXECUTOR_ARG_CASTS`` are popped from ``overrides`` and
-    written onto the thinker stage's ``executor.args`` so they land as kwargs
-    on ``create_sglang_thinker_executor_from_config``. Remaining keys are
-    returned to be forwarded as raw SGLang ``server_args_overrides``.
+    Casts + validates ``thinker_max_seq_len`` and ``encoder_mem_reserve``
+    into a temporary dict first, so a bad value raises before the stage
+    state is mutated. Remaining keys are returned for forwarding as raw
+    SGLang ``server_args_overrides``.
     """
     remaining = dict(overrides)
     if stage_name != THINKER_STAGE:
         return remaining
 
-    # Cast-before-mutate: validate every executor kwarg into a temporary dict
-    # first. If any cast raises, abort before touching stage.executor.args so
-    # callers that retry do not see a partially-applied state (e.g. a valid
-    # ``thinker_max_seq_len`` already written while a later ``encoder_mem_reserve``
-    # cast failed). Atomicity here matters because ``apply_server_args_overrides``
-    # is a public entry point that callers legitimately wrap in try/except.
     casted: dict[str, Any] = {}
-    for key, cast in _THINKER_EXECUTOR_ARG_CASTS.items():
-        value = remaining.pop(key, None)
-        if value is not None:
-            casted[key] = cast(value)
+
+    seq_len = remaining.pop("thinker_max_seq_len", None)
+    if seq_len is not None:
+        casted["thinker_max_seq_len"] = int(seq_len)
+
+    reserve = remaining.pop("encoder_mem_reserve", None)
+    if reserve is not None:
+        reserve = float(reserve)
+        if not 0.0 <= reserve < 1.0:
+            raise ValueError(f"encoder_mem_reserve must be in [0, 1), got {reserve}")
+        casted["encoder_mem_reserve"] = reserve
 
     if casted:
         for stage in stages:
             if stage.name == THINKER_STAGE:
-                # ``ExecutorConfig.args`` has ``default_factory=dict`` in the
-                # pydantic schema, so it is always a dict here — no None guard
-                # needed.
                 stage.executor.args.update(casted)
                 break
     return remaining
