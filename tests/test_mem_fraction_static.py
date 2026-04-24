@@ -153,6 +153,148 @@ class TestMemFractionStaticOverrides(unittest.TestCase):
         self.assertEqual(server_args.mem_fraction_static, 0.929)
 
 
+@unittest.skipUnless(_qwen3_available, "qwen3_omni config not importable")
+class TestEncoderMemReserveRouting(unittest.TestCase):
+    """Round-trip + fallback + validation coverage for ``--encoder-mem-reserve``."""
+
+    def test_encoder_mem_reserve_round_trips_to_thinker_stage_args(self) -> None:
+        """``apply_server_args_overrides`` routes ``encoder_mem_reserve`` to the thinker stage args, not ``server_args_overrides``."""
+        config = Qwen3OmniPipelineConfig(model_path="dummy")
+
+        config.apply_server_args_overrides(
+            stage_name="thinker",
+            overrides={"encoder_mem_reserve": 0.20},
+        )
+
+        thinker_stage = next(s for s in config.stages if s.name == "thinker")
+        self.assertEqual(thinker_stage.executor.args["encoder_mem_reserve"], 0.20)
+        self.assertNotIn(
+            "encoder_mem_reserve",
+            thinker_stage.executor.args.get("server_args_overrides", {}),
+        )
+
+    @patch(
+        "sglang_omni.models.qwen3_omni.pipeline.stages.create_sglang_thinker_executor"
+    )
+    def test_encoder_mem_reserve_reaches_thinker_factory(
+        self, create_thinker_executor_mock
+    ) -> None:
+        """The routed ``encoder_mem_reserve`` lands on ``build_sglang_server_args(auto_mem_fraction_static_reserve=...)`` unchanged."""
+        config = Qwen3OmniPipelineConfig(model_path="dummy")
+        config.apply_server_args_overrides(
+            stage_name="thinker",
+            overrides={"encoder_mem_reserve": 0.20},
+        )
+        thinker_stage = next(s for s in config.stages if s.name == "thinker")
+
+        with patch(
+            "sglang_omni.engines.ar.sglang_backend.server_args_builder.ServerArgs"
+        ) as server_args_mock:
+            server_args_mock.return_value = SimpleNamespace(mem_fraction_static=0.929)
+            create_sglang_thinker_executor_from_config(
+                model_path="dummy",
+                **thinker_stage.executor.args,
+            )
+
+        server_args = create_thinker_executor_mock.call_args.kwargs["server_args"]
+        # auto=0.929 minus reserve=0.20 => 0.729 after rounding.
+        self.assertEqual(server_args.mem_fraction_static, 0.729)
+
+    @patch(
+        "sglang_omni.models.qwen3_omni.pipeline.stages.create_sglang_thinker_executor"
+    )
+    def test_factory_falls_back_to_module_constant_when_reserve_is_none(
+        self, create_thinker_executor_mock
+    ) -> None:
+        """``encoder_mem_reserve=None`` means the factory reuses ``OMNI_ENCODER_MEM_FRACTION_STATIC_RESERVE`` (0.05)."""
+        with patch(
+            "sglang_omni.engines.ar.sglang_backend.server_args_builder.ServerArgs"
+        ) as server_args_mock:
+            server_args_mock.return_value = SimpleNamespace(mem_fraction_static=0.929)
+            create_sglang_thinker_executor_from_config(
+                model_path="dummy",
+                thinker_max_seq_len=8192,
+                # encoder_mem_reserve deliberately omitted -> None default.
+            )
+
+        server_args = create_thinker_executor_mock.call_args.kwargs["server_args"]
+        # auto=0.929 minus constant=0.05 => 0.879 after rounding.
+        self.assertEqual(server_args.mem_fraction_static, 0.879)
+
+    def test_cast_validator_rejects_out_of_range_values(self) -> None:
+        """The cast validator rejects negative, >=1, and large out-of-range values."""
+        from sglang_omni.models.qwen3_omni.config import _cast_encoder_mem_reserve
+
+        for bad in (-0.1, 1.0, 1.5):
+            with self.assertRaisesRegex(
+                ValueError, r"encoder_mem_reserve must be in \[0, 1\)"
+            ):
+                _cast_encoder_mem_reserve(bad)
+
+    def test_cast_validator_accepts_in_range_values(self) -> None:
+        """The cast validator accepts 0, small, and near-1 values, returning a float."""
+        from sglang_omni.models.qwen3_omni.config import _cast_encoder_mem_reserve
+
+        for good in (0.0, 0.05, 0.9):
+            result = _cast_encoder_mem_reserve(good)
+            self.assertIsInstance(result, float)
+            self.assertEqual(result, good)
+
+    def test_out_of_range_encoder_mem_reserve_rejected_via_apply_overrides(
+        self,
+    ) -> None:
+        """Programmatic callers of ``apply_server_args_overrides`` also hit the cast validator."""
+        config = Qwen3OmniPipelineConfig(model_path="dummy")
+
+        with self.assertRaisesRegex(
+            ValueError, r"encoder_mem_reserve must be in \[0, 1\)"
+        ):
+            config.apply_server_args_overrides(
+                stage_name="thinker",
+                overrides={"encoder_mem_reserve": 5.0},
+            )
+
+
+class TestMingDropsEncoderMemReserve(unittest.TestCase):
+    """Ming pipelines pop ``encoder_mem_reserve`` defensively (no runtime path yet)."""
+
+    def test_ming_base_drops_encoder_mem_reserve_without_leaking_to_server_args(
+        self,
+    ) -> None:
+        """MingOmniPipelineConfig pops ``encoder_mem_reserve`` so ServerArgs unpack will not crash."""
+        config = MingOmniPipelineConfig(model_path="dummy")
+
+        config.apply_server_args_overrides(
+            stage_name="thinker",
+            overrides={"encoder_mem_reserve": 0.20, "cpu_offload_gb": 40},
+        )
+
+        thinker_stage = next(s for s in config.stages if s.name == "thinker")
+        overrides = thinker_stage.executor.args.get("server_args_overrides", {})
+        self.assertNotIn("encoder_mem_reserve", overrides)
+        self.assertNotIn("encoder_mem_reserve", thinker_stage.executor.args)
+        # Other keys still flow through unchanged.
+        self.assertEqual(overrides.get("cpu_offload_gb"), 40)
+
+    def test_ming_speech_drops_encoder_mem_reserve_without_leaking_to_server_args(
+        self,
+    ) -> None:
+        """MingOmniSpeechPipelineConfig also pops ``encoder_mem_reserve``."""
+        from sglang_omni.models.ming_omni.config import MingOmniSpeechPipelineConfig
+
+        config = MingOmniSpeechPipelineConfig(model_path="dummy")
+        config.apply_server_args_overrides(
+            stage_name="thinker",
+            overrides={"encoder_mem_reserve": 0.20, "cpu_offload_gb": 40},
+        )
+
+        thinker_stage = next(s for s in config.stages if s.name == "thinker")
+        overrides = thinker_stage.executor.args.get("server_args_overrides", {})
+        self.assertNotIn("encoder_mem_reserve", overrides)
+        self.assertNotIn("encoder_mem_reserve", thinker_stage.executor.args)
+        self.assertEqual(overrides.get("cpu_offload_gb"), 40)
+
+
 class TestH20AutoMemFractionFloor(unittest.TestCase):
     def test_h20_auto_mem_fraction_static_has_expected_floor(self) -> None:
         """On H20 hardware, SGLang's auto-sized mem_fraction_static must sit at or above 0.85."""
