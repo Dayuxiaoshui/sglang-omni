@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any, ClassVar
 
 from sglang_omni.config import (
@@ -113,7 +114,7 @@ class Qwen3OmniPipelineConfig(PipelineConfig):
             and overrides["tp_size"] > 1
         ):
             raise NotImplementedError("Qwen3-Omni TP is not supported yet.")
-        remaining = _route_thinker_max_seq_len(self.stages, stage_name, overrides)
+        remaining = _route_thinker_executor_args(self.stages, stage_name, overrides)
         if remaining:
             super().apply_server_args_overrides(
                 stage_name=stage_name,
@@ -121,20 +122,36 @@ class Qwen3OmniPipelineConfig(PipelineConfig):
             )
 
 
-def _route_thinker_max_seq_len(
+def _route_thinker_executor_args(
     stages: list[StageConfig],
     stage_name: str,
     overrides: dict[str, Any],
 ) -> dict[str, Any]:
+    """Route thinker-factory kwargs (not raw SGLang ServerArgs) to stage args.
+
+    Keys in ``_THINKER_EXECUTOR_ARG_CASTS`` are popped from ``overrides`` and
+    written onto the thinker stage's ``executor.args`` so they land as kwargs
+    on ``create_sglang_thinker_executor_from_config``. Remaining keys are
+    returned to be forwarded as raw SGLang ``server_args_overrides``.
+    """
     remaining = dict(overrides)
-    thinker_max_seq_len = remaining.pop("thinker_max_seq_len", None)
-    if thinker_max_seq_len is None or stage_name != THINKER_STAGE:
+    if stage_name != THINKER_STAGE:
         return remaining
-    for stage in stages:
-        if stage.name == THINKER_STAGE:
-            stage.executor.args["thinker_max_seq_len"] = int(thinker_max_seq_len)
-            break
+    for key, cast in _THINKER_EXECUTOR_ARG_CASTS.items():
+        value = remaining.pop(key, None)
+        if value is None:
+            continue
+        for stage in stages:
+            if stage.name == THINKER_STAGE:
+                stage.executor.args[key] = cast(value)
+                break
     return remaining
+
+
+_THINKER_EXECUTOR_ARG_CASTS: dict[str, Callable[[Any], Any]] = {
+    "thinker_max_seq_len": int,
+    "encoder_mem_reserve": float,
+}
 
 
 def _validate_qwen3_speech_gpu_placement(
@@ -302,7 +319,7 @@ class Qwen3OmniSpeechPipelineConfig(PipelineConfig):
             )
             if tp_size > 1:
                 raise NotImplementedError("Qwen3-Omni TP is not supported yet.")
-        remaining = _route_thinker_max_seq_len(self.stages, stage_name, overrides)
+        remaining = _route_thinker_executor_args(self.stages, stage_name, overrides)
         if remaining:
             super().apply_server_args_overrides(
                 stage_name=stage_name,

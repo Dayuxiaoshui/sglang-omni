@@ -354,6 +354,7 @@ def create_sglang_thinker_executor_from_config(
     *,
     gpu_id: int = 0,
     thinker_max_seq_len: int = 8192,
+    encoder_mem_reserve: float | None = None,
     server_args_overrides: dict[str, Any] | None = None,
     speech_enabled: bool = False,
 ) -> EngineExecutor:
@@ -361,12 +362,23 @@ def create_sglang_thinker_executor_from_config(
 
     This keeps pipeline config args plain dict types while still constructing
     a typed ServerArgs object internally.
+
+    Args:
+        encoder_mem_reserve: Optional GPU-memory fraction reserved outside
+            SGLang's KV-cache pool for the co-located vision/audio encoder.
+            Falls back to ``OMNI_ENCODER_MEM_FRACTION_STATIC_RESERVE`` (0.05)
+            when ``None``.
     """
+    reserve = (
+        encoder_mem_reserve
+        if encoder_mem_reserve is not None
+        else OMNI_ENCODER_MEM_FRACTION_STATIC_RESERVE
+    )
     pre_load_avail_mem = avail_gpu_mem(gpu_id)
     server_args = build_sglang_server_args(
         model_path,
         context_length=thinker_max_seq_len,
-        auto_mem_fraction_static_reserve=OMNI_ENCODER_MEM_FRACTION_STATIC_RESERVE,
+        auto_mem_fraction_static_reserve=reserve,
         **(server_args_overrides or {}),
     )
     pre_load_mem = (

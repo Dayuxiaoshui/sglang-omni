@@ -69,6 +69,19 @@ def parse_args() -> argparse.Namespace:
             "If omitted, SGLang chooses automatically."
         ),
     )
+    parser.add_argument(
+        "--encoder-mem-reserve",
+        type=float,
+        default=None,
+        help=(
+            "GPU-memory fraction reserved outside SGLang's KV-cache pool "
+            "for the co-located vision/audio encoder on the thinker GPU. "
+            "Subtracted from SGLang's auto-selected mem_fraction_static; "
+            "ignored when --mem-fraction-static is pinned. Default 0.05 is "
+            "tuned for single-request/short-video workloads; raise to "
+            "0.15-0.20 for high-concurrency long-video workloads."
+        ),
+    )
 
     # Server
     parser.add_argument("--host", type=str, default="0.0.0.0")
@@ -91,6 +104,12 @@ def main() -> None:
         overrides["thinker_max_seq_len"] = args.thinker_max_seq_len
     if args.cpu_offload_gb:
         overrides["cpu_offload_gb"] = args.cpu_offload_gb
+    if args.encoder_mem_reserve is not None:
+        if not 0.0 <= args.encoder_mem_reserve < 1.0:
+            raise ValueError(
+                f"--encoder-mem-reserve must be in [0, 1), got {args.encoder_mem_reserve}"
+            )
+        overrides["encoder_mem_reserve"] = args.encoder_mem_reserve
 
     config = Qwen3OmniPipelineConfig(
         model_path=args.model_path,
