@@ -254,6 +254,50 @@ class TestEncoderMemReserveRouting(unittest.TestCase):
                 overrides={"encoder_mem_reserve": 5.0},
             )
 
+    def test_thinker_executor_args_atomic_on_partial_cast_failure(self) -> None:
+        """Mix of (valid thinker_max_seq_len + invalid encoder_mem_reserve): the valid key must not be partially written when a later cast raises."""
+        config = Qwen3OmniPipelineConfig(model_path="dummy")
+        thinker_stage = next(s for s in config.stages if s.name == "thinker")
+        original_args = dict(thinker_stage.executor.args or {})
+
+        with self.assertRaises(ValueError):
+            config.apply_server_args_overrides(
+                stage_name="thinker",
+                overrides={
+                    "thinker_max_seq_len": 16384,  # valid cast
+                    "encoder_mem_reserve": 5.0,  # out-of-range -> cast raises
+                },
+            )
+
+        current_args = dict(thinker_stage.executor.args or {})
+        self.assertEqual(
+            current_args,
+            original_args,
+            "thinker_max_seq_len was written despite later cast failure -- routing is not atomic",
+        )
+
+    def test_thinker_executor_args_atomic_reverse_order(self) -> None:
+        """Reverse mix (valid encoder_mem_reserve + invalid thinker_max_seq_len): same atomicity guarantee holds regardless of which key fails."""
+        config = Qwen3OmniPipelineConfig(model_path="dummy")
+        thinker_stage = next(s for s in config.stages if s.name == "thinker")
+        original_args = dict(thinker_stage.executor.args or {})
+
+        with self.assertRaises((ValueError, TypeError)):
+            config.apply_server_args_overrides(
+                stage_name="thinker",
+                overrides={
+                    "encoder_mem_reserve": 0.20,  # valid cast
+                    "thinker_max_seq_len": "not-an-int",  # int() -> ValueError
+                },
+            )
+
+        current_args = dict(thinker_stage.executor.args or {})
+        self.assertEqual(
+            current_args,
+            original_args,
+            "encoder_mem_reserve was written despite later cast failure -- routing is not atomic",
+        )
+
 
 class TestMingDropsEncoderMemReserve(unittest.TestCase):
     """Ming pipelines pop ``encoder_mem_reserve`` defensively (no runtime path yet)."""

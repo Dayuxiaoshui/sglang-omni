@@ -159,13 +159,25 @@ def _route_thinker_executor_args(
     remaining = dict(overrides)
     if stage_name != THINKER_STAGE:
         return remaining
+
+    # Cast-before-mutate: validate every executor kwarg into a temporary dict
+    # first. If any cast raises, abort before touching stage.executor.args so
+    # callers that retry do not see a partially-applied state (e.g. a valid
+    # ``thinker_max_seq_len`` already written while a later ``encoder_mem_reserve``
+    # cast failed). Atomicity here matters because ``apply_server_args_overrides``
+    # is a public entry point that callers legitimately wrap in try/except.
+    casted: dict[str, Any] = {}
     for key, cast in _THINKER_EXECUTOR_ARG_CASTS.items():
         value = remaining.pop(key, None)
-        if value is None:
-            continue
+        if value is not None:
+            casted[key] = cast(value)
+
+    if casted:
         for stage in stages:
             if stage.name == THINKER_STAGE:
-                stage.executor.args[key] = cast(value)
+                if stage.executor.args is None:
+                    stage.executor.args = {}
+                stage.executor.args.update(casted)
                 break
     return remaining
 
