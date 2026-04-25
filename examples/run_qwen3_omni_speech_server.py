@@ -47,6 +47,30 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--model-path", type=str, default="Qwen/Qwen3-Omni-30B-A3B-Instruct"
     )
+    parser.add_argument(
+        "--thinker-max-seq-len",
+        type=int,
+        default=None,
+        help=(
+            "Override the thinker stage's ``thinker_max_seq_len``. Useful "
+            "for long-video or long-audio prompts that exceed the default."
+        ),
+    )
+    parser.add_argument(
+        "--talker-attention-backend",
+        type=str,
+        default=None,
+        help=(
+            "Pin the Talker AR stage's SGLang attention backend "
+            "independently of the Thinker (the flag applies to both the "
+            "regular and multimodal attention backends on the Talker). "
+            "SGLang auto-selects 'fa3' on Hopper; overriding this to e.g. "
+            "'triton' lets operators investigate Talker-path kernel "
+            "regressions — see "
+            "docs/developer_reference/videomme_talker_ci_deferral.md for "
+            "a concrete example — without recompiling SGLang."
+        ),
+    )
 
     # GPU placement
     parser.add_argument("--gpu-thinker", type=int, default=0)
@@ -118,6 +142,21 @@ async def main_async(args: argparse.Namespace) -> None:
         relay_backend=args.relay_backend,
         gpu_placement=gpu_placement,
     )
+    thinker_overrides: dict[str, object] = {}
+    if args.thinker_max_seq_len is not None:
+        thinker_overrides["thinker_max_seq_len"] = args.thinker_max_seq_len
+    if thinker_overrides:
+        config.apply_server_args_overrides(
+            stage_name="thinker", overrides=thinker_overrides
+        )
+    if args.talker_attention_backend is not None:
+        config.apply_server_args_overrides(
+            stage_name="talker_ar",
+            overrides={
+                "attention_backend": args.talker_attention_backend,
+                "mm_attention_backend": args.talker_attention_backend,
+            },
+        )
     thinker_mem_fraction_static, talker_mem_fraction_static = (
         resolve_and_apply_speech_mem_fraction(
             config,
