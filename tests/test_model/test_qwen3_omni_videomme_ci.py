@@ -57,6 +57,7 @@ def test_videomme_accuracy_and_speed(
         video_max_frames=128,
         video_max_pixels=401408,
         disable_tqdm=False,
+        timeout_s=500,
     )
     results = asyncio.run(
         run_video_eval(
