@@ -1,5 +1,32 @@
 # SPDX-License-Identifier: Apache-2.0
-"""JSON-only S2-Pro stage-3 checks for GitHub-hosted runners."""
+"""JSON-only S2-Pro stage-3 checks for GitHub-hosted runners.
+
+Note (Chenyang):
+To run locally, first run stage 1 and stage 2:
+
+S2PRO_STAGE_OUTPUT_ROOT=$PWD/stage-results/nonstream \
+pytest tests/test_model/test_s2pro_tts_ci.py -v -s -x --concurrency 8 \
+  --s2pro-stage s2pro-stage-1-nonstream
+
+S2PRO_STAGE_OUTPUT_ROOT=$PWD/stage-results/stream \
+pytest tests/test_model/test_s2pro_tts_ci.py -v -s -x --concurrency 8 \
+  --s2pro-stage s2pro-stage-2-stream
+
+Then run this JSON-only stage 3 check:
+
+S2PRO_STAGE1_SPEED_RESULTS_DIR=$PWD/stage-results/nonstream \
+S2PRO_STAGE2_SPEED_RESULTS_DIR=$PWD/stage-results/stream \
+pytest tests/test_model/test_s2pro_consistency_artifacts.py -v -s -x
+
+
+Note (Chenyang):
+    This stage does not compare generated token/content similarity or output
+    quality. Those are covered by the earlier WER checks, and the CI DAG
+    runs stage 3 only after stage 1 and stage 2 pass.
+
+Author:
+    Chenyang Zhao https://github.com/zhaochenyang20
+"""
 
 from __future__ import annotations
 
@@ -7,7 +34,7 @@ import json
 import os
 from pathlib import Path
 
-from tests.s2pro_consistency import assert_streaming_consistency
+from tests.utils import assert_streaming_consistency
 
 S2PRO_STAGE1_SPEED_RESULTS_DIR_ENV = "S2PRO_STAGE1_SPEED_RESULTS_DIR"
 S2PRO_STAGE2_SPEED_RESULTS_DIR_ENV = "S2PRO_STAGE2_SPEED_RESULTS_DIR"
@@ -43,6 +70,9 @@ def _selected_concurrency() -> int:
 
 
 def test_s2pro_streaming_consistency_from_artifacts() -> None:
+    """Validate stage-1 (non-stream) vs stage-2 (stream) speed_results.json
+    artifacts agree on structural invariants: prompt token counts, completion
+    token counts, and audio duration within tolerance."""
     concurrency = _selected_concurrency()
     non_stream_results = _load_speed_results(
         S2PRO_STAGE1_SPEED_RESULTS_DIR_ENV,
