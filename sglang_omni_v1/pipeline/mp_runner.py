@@ -34,22 +34,18 @@ def _build_stage_groups(
     config: PipelineConfig,
     ctx: multiprocessing.context.BaseContext | None = None,
     *,
-    stages_cfg: list[StageConfig] | None = None,
-    name_map: dict[str, str] | None = None,
-    endpoints: dict[str, str] | None = None,
+    stages_cfg: list[StageConfig],
+    name_map: dict[str, str],
+    endpoints: dict[str, str],
 ) -> list[StageGroup]:
-    """Compile *config* into one :class:`StageGroup` per logical stage.
+    """Build one :class:`StageGroup` per logical stage from prepared endpoints.
 
-    This runs in the **main process** so that subprocesses never need to
-    re-compile the pipeline configuration.
+    The caller owns endpoint allocation and IPC runtime-dir lifecycle. This
+    helper only converts prepared runtime state into subprocess specs.
     """
     if ctx is None:
         ctx = multiprocessing.get_context("spawn")
 
-    if stages_cfg is None or name_map is None or endpoints is None:
-        if config.endpoints.scheme == "ipc":
-            raise ValueError("_build_stage_groups requires prepared IPC endpoints")
-        stages_cfg, name_map, _, endpoints, _, _ = prepare_pipeline_runtime(config)
     stage_endpoints = {s.name: endpoints[f"stage_{s.name}"] for s in stages_cfg}
     cfg_map = {s.name: s for s in stages_cfg}
 
@@ -289,29 +285,23 @@ class MultiProcessPipelineRunner:
 
         try:
             ctx = multiprocessing.get_context("spawn")
-            (
-                stages_cfg,
-                name_map,
-                entry_stage,
-                endpoints,
-                self._ipc_runtime_dir,
-                _,
-            ) = prepare_pipeline_runtime(
+            prep = prepare_pipeline_runtime(
                 self._config,
                 ipc_runtime_dir=self._ipc_runtime_dir,
             )
+            self._ipc_runtime_dir = prep.runtime_dir
             groups = _build_stage_groups(
                 self._config,
                 ctx,
-                stages_cfg=stages_cfg,
-                name_map=name_map,
-                endpoints=endpoints,
+                stages_cfg=prep.stages_cfg,
+                name_map=prep.name_map,
+                endpoints=prep.endpoints,
             )
 
             self._coordinator = Coordinator(
-                completion_endpoint=endpoints["completion"],
-                abort_endpoint=endpoints["abort"],
-                entry_stage=entry_stage,
+                completion_endpoint=prep.endpoints["completion"],
+                abort_endpoint=prep.endpoints["abort"],
+                entry_stage=prep.entry_stage,
                 terminal_stages=self._config.terminal_stages or None,
             )
             await self._coordinator.start()

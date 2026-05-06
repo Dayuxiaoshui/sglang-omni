@@ -191,11 +191,11 @@ async def _run_server(
             logger.info("Pipeline stopped.")
     else:
         coordinator, stages, runtime_dir = compile_pipeline_core(pipeline_config)
-        stage_endpoints = _collect_stage_control_endpoints(stages)
         completion_task = None
         stage_tasks = []
 
         try:
+            stage_endpoints = _collect_stage_control_endpoints(stages)
             await coordinator.start()
             completion_task = asyncio.create_task(coordinator.run_completion_loop())
             stage_tasks = [asyncio.create_task(s.run()) for s in stages]

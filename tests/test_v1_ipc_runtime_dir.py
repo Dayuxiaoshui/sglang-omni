@@ -15,6 +15,7 @@ from fastapi import FastAPI
 pytest.importorskip("torch")
 
 from sglang_omni_v1.config.compiler import (
+    IpcRuntimeDir,
     compile_pipeline,
     compile_pipeline_core,
     create_ipc_runtime_dir,
@@ -223,6 +224,44 @@ class TestV1MultiProcessRunnerIpcCleanup(unittest.IsolatedAsyncioTestCase):
 
 
 class TestV1LauncherIpcCleanup(unittest.IsolatedAsyncioTestCase):
+    async def _run_single_process_launcher_with_mocked_server(
+        self,
+        *,
+        config: PipelineConfig,
+        runtime_dir: IpcRuntimeDir,
+        serve_mock: AsyncMock,
+    ) -> tuple[_FakeCoordinator, FastAPI]:
+        stage = _FakeStage(f"ipc://{runtime_dir.path}/stage_preprocessing.sock")
+        coordinator = _FakeCoordinator()
+        app = FastAPI()
+
+        from sglang_omni_v1.serve.launcher import _run_server
+
+        with (
+            patch(
+                "sglang_omni_v1.serve.launcher._find_available_port",
+                return_value=8000,
+            ),
+            patch(
+                "sglang_omni_v1.serve.launcher.compile_pipeline_core",
+                return_value=(coordinator, [stage], runtime_dir),
+            ) as compile_pipeline_core,
+            patch(
+                "sglang_omni_v1.serve.launcher.create_app",
+                return_value=app,
+            ) as create_app,
+            patch(
+                "sglang_omni_v1.serve.launcher.uvicorn.Server.serve",
+                new=serve_mock,
+            ),
+        ):
+            await _run_server(config, port=8000)
+
+        compile_pipeline_core.assert_called_once_with(config)
+        create_app.assert_called_once()
+
+        return coordinator, app
+
     async def test_single_process_launcher_cleans_runtime_dir_on_server_exit(
         self,
     ) -> None:
@@ -231,39 +270,40 @@ class TestV1LauncherIpcCleanup(unittest.IsolatedAsyncioTestCase):
             runtime_dir = create_ipc_runtime_dir(config)
             self.assertIsNotNone(runtime_dir)
             runtime_path = runtime_dir.path
-            stage = _FakeStage(f"ipc://{runtime_path}/stage_preprocessing.sock")
-            coordinator = _FakeCoordinator()
-            app = FastAPI()
             server_serve = AsyncMock(return_value=None)
 
-            from sglang_omni_v1.serve.launcher import _run_server
-
-            with (
-                patch(
-                    "sglang_omni_v1.serve.launcher._find_available_port",
-                    return_value=8000,
-                ),
-                patch(
-                    "sglang_omni_v1.serve.launcher.compile_pipeline_core",
-                    return_value=(coordinator, [stage], runtime_dir),
-                ) as compile_pipeline_core,
-                patch(
-                    "sglang_omni_v1.serve.launcher.create_app",
-                    return_value=app,
-                ) as create_app,
-                patch(
-                    "sglang_omni_v1.serve.launcher.uvicorn.Server.serve",
-                    new=server_serve,
-                ),
-            ):
-                await _run_server(config, port=8000)
+            coordinator, app = (
+                await self._run_single_process_launcher_with_mocked_server(
+                    config=config,
+                    runtime_dir=runtime_dir,
+                    serve_mock=server_serve,
+                )
+            )
 
             self.assertTrue(coordinator.started)
             self.assertTrue(coordinator.stopped)
-            compile_pipeline_core.assert_called_once_with(config)
-            create_app.assert_called_once()
             server_serve.assert_awaited_once()
             mounted_paths = {route.path for route in app.routes}
             self.assertIn("/start_profile", mounted_paths)
             self.assertIn("/stop_profile", mounted_paths)
+            self.assertFalse(runtime_path.exists())
+
+    async def test_single_process_launcher_cleans_runtime_dir_on_server_error(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            config = _make_config(tmp_dir)
+            runtime_dir = create_ipc_runtime_dir(config)
+            self.assertIsNotNone(runtime_dir)
+            runtime_path = runtime_dir.path
+            server_serve = AsyncMock(side_effect=RuntimeError("server failed"))
+
+            with self.assertRaisesRegex(RuntimeError, "server failed"):
+                await self._run_single_process_launcher_with_mocked_server(
+                    config=config,
+                    runtime_dir=runtime_dir,
+                    serve_mock=server_serve,
+                )
+
+            server_serve.assert_awaited_once()
             self.assertFalse(runtime_path.exists())

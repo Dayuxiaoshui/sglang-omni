@@ -9,6 +9,7 @@ import re
 import shutil
 import socket
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -46,6 +47,18 @@ class IpcRuntimeDir:
             logger.warning("Failed to remove IPC runtime dir %s: %s", self.path, exc)
 
 
+@dataclass(frozen=True)
+class PipelineRuntimePrep:
+    """Prepared stage and endpoint state for one pipeline runtime."""
+
+    stages_cfg: list[StageConfig]
+    name_map: dict[str, str]
+    entry_stage: str
+    endpoints: dict[str, str]
+    runtime_dir: IpcRuntimeDir | None
+    runtime_dir_created_here: bool
+
+
 def create_ipc_runtime_dir(config: PipelineConfig) -> IpcRuntimeDir | None:
     """Create a per-run IPC namespace for one pipeline instance."""
     if config.endpoints.scheme != "ipc":
@@ -65,16 +78,18 @@ def prepare_pipeline_runtime(
     config: PipelineConfig,
     *,
     ipc_runtime_dir: IpcRuntimeDir | None = None,
-) -> tuple[
-    list[StageConfig], dict[str, str], str, dict[str, str], IpcRuntimeDir | None, bool
-]:
-    """Prepare fused stages and endpoint allocation for one runtime."""
+) -> PipelineRuntimePrep:
+    """Prepare fused stages and endpoint allocation for one runtime.
+
+    Caller-provided IPC runtime dirs stay caller-owned. This helper only
+    closes runtime dirs it creates internally.
+    """
     runtime_dir = ipc_runtime_dir
     created_runtime_dir = None
     if runtime_dir is None:
         runtime_dir = create_ipc_runtime_dir(config)
         created_runtime_dir = runtime_dir
-    owns_runtime_dir = created_runtime_dir is not None
+    runtime_dir_created_here = created_runtime_dir is not None
 
     try:
         stages_cfg, name_map, entry_stage = config.apply_fusion()
@@ -88,7 +103,14 @@ def prepare_pipeline_runtime(
             created_runtime_dir.close()
         raise
 
-    return stages_cfg, name_map, entry_stage, endpoints, runtime_dir, owns_runtime_dir
+    return PipelineRuntimePrep(
+        stages_cfg=stages_cfg,
+        name_map=name_map,
+        entry_stage=entry_stage,
+        endpoints=endpoints,
+        runtime_dir=runtime_dir,
+        runtime_dir_created_here=runtime_dir_created_here,
+    )
 
 
 def compile_pipeline_core(
@@ -96,35 +118,43 @@ def compile_pipeline_core(
     *,
     ipc_runtime_dir: IpcRuntimeDir | None = None,
 ) -> tuple[Coordinator, list[Stage], IpcRuntimeDir | None]:
-    """Build the coordinator and stage objects from the pipeline configuration."""
-    stages_cfg, name_map, entry_stage, endpoints, runtime_dir, owns_runtime_dir = (
-        prepare_pipeline_runtime(
-            config,
-            ipc_runtime_dir=ipc_runtime_dir,
-        )
+    """Build coordinator and stages, returning any managed runtime dir.
+
+    Caller-provided IPC runtime dirs stay caller-owned. The returned runtime
+    dir must be closed by the caller after successful compilation.
+    """
+    prep = prepare_pipeline_runtime(
+        config,
+        ipc_runtime_dir=ipc_runtime_dir,
     )
 
     try:
         coordinator = Coordinator(
-            completion_endpoint=endpoints["completion"],
-            abort_endpoint=endpoints["abort"],
-            entry_stage=entry_stage,
+            completion_endpoint=prep.endpoints["completion"],
+            abort_endpoint=prep.endpoints["abort"],
+            entry_stage=prep.entry_stage,
             terminal_stages=config.terminal_stages or None,
         )
 
-        stage_endpoints = {s.name: endpoints[f"stage_{s.name}"] for s in stages_cfg}
+        stage_endpoints = {
+            s.name: prep.endpoints[f"stage_{s.name}"] for s in prep.stages_cfg
+        }
 
         stages: list[Stage] = []
-        for stage_cfg in stages_cfg:
+        for stage_cfg in prep.stages_cfg:
             stage = _compile_stage(
-                stage_cfg, config, stage_endpoints, endpoints, name_map=name_map
+                stage_cfg,
+                config,
+                stage_endpoints,
+                prep.endpoints,
+                name_map=prep.name_map,
             )
             coordinator.register_stage(stage.name, stage.control_plane.recv_endpoint)
             stages.append(stage)
 
         stage_map = {stage.name: stage for stage in stages}
-        cfg_map = {s.name: s for s in stages_cfg}
-        for stage_cfg in stages_cfg:
+        cfg_map = {s.name: s for s in prep.stages_cfg}
+        for stage_cfg in prep.stages_cfg:
             stage = stage_map.get(stage_cfg.name)
             if stage is None:
                 continue
@@ -136,18 +166,18 @@ def compile_pipeline_core(
                 cfg_map=cfg_map,
             )
     except Exception:
-        if owns_runtime_dir and runtime_dir is not None:
-            runtime_dir.close()
+        if prep.runtime_dir_created_here and prep.runtime_dir is not None:
+            prep.runtime_dir.close()
         raise
 
-    return coordinator, stages, runtime_dir
+    return coordinator, stages, prep.runtime_dir
 
 
 def compile_pipeline(config: PipelineConfig) -> tuple[Coordinator, list[Stage]]:
     """Build coordinator and stages directly from a pipeline config.
 
-    IPC pipelines need explicit runtime-directory ownership so multiple
-    replicas cannot bind the same local sockets.
+    This thin helper is TCP-only. For IPC, use compile_pipeline_core(...)
+    with explicit runtime-dir cleanup, or MultiProcessPipelineRunner.
     """
     if config.endpoints.scheme == "ipc":
         raise ValueError(
