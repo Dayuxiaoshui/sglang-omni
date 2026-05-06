@@ -120,8 +120,13 @@ def compile_pipeline_core(
 ) -> tuple[Coordinator, list[Stage], IpcRuntimeDir | None]:
     """Build coordinator and stages, returning any managed runtime dir.
 
-    Caller-provided IPC runtime dirs stay caller-owned. The returned runtime
-    dir must be closed by the caller after successful compilation.
+    Note (Chenyang, Ratish):
+        1. If the caller passes ipc_runtime_dir, that dir is caller-owned for
+           the full lifetime — this function never closes it, on success or on
+           failure. The same dir is returned back so callers can keep using it.
+        2. If the caller does not pass one, this function may create a new
+           runtime dir internally; that dir is closed automatically on failure
+           and returned to the caller on success. The caller MUST close it.
     """
     prep = prepare_pipeline_runtime(
         config,
