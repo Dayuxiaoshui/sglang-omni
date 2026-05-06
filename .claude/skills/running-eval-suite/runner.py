@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import fcntl
 import json
 import os
 import re
@@ -26,6 +27,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -509,8 +511,13 @@ def cmd_run(args: argparse.Namespace) -> int:
         "source_prefix": src_prefix,
         "rows": [],
     }
+    gpu_pool: list[int] | None = None
+    if args.gpu_pool:
+        gpu_pool = [int(s.strip()) for s in args.gpu_pool.split(",") if s.strip()]
+        print(f"gpu_pool: {gpu_pool}")
     for row in selected:
-        row_state = _run_one_row(row, py, root, out, rounds, smoke, cfg)
+        row_state = _run_one_row(row, py, root, out, rounds, smoke, cfg,
+                                 gpu_pool=gpu_pool)
         if row_state["status"] == "ok" and smoke is None:
             row_state["edit"] = _try_edit_inplace(
                 row, row_state, root, hw, src_prefix,
@@ -558,7 +565,8 @@ def cmd_run(args: argparse.Namespace) -> int:
 
 
 def _run_one_row(row: dict, py: str, root: Path, out_root: Path,
-                 rounds: int, smoke: int | None, cfg: dict) -> dict:
+                 rounds: int, smoke: int | None, cfg: dict,
+                 gpu_pool: list[int] | None = None) -> dict:
     row_id = row["id"]
     row_dir = out_root / row_id
     row_dir.mkdir(parents=True, exist_ok=True)
@@ -569,11 +577,16 @@ def _run_one_row(row: dict, py: str, root: Path, out_root: Path,
     if err:
         return {"id": row_id, "status": "fail", "reason": err, "rounds": []}
     free = free_gpu_indices(gpus)
+    if gpu_pool is not None:
+        pool_set = set(gpu_pool)
+        free = [g for g in free if g in pool_set]
     if len(free) < gpu_count:
+        pool_note = f" (pool={gpu_pool})" if gpu_pool is not None else ""
         return {
             "id": row_id, "status": "fail",
             "reason": (
                 f"not enough free GPUs (need {gpu_count}, have {len(free)})"
+                f"{pool_note}"
             ),
             "rounds": [],
         }
@@ -689,6 +702,20 @@ def _truncate(s: str, n: int) -> str:
 
 # ---------- in-place edit (the core of the new design) ----------
 
+@contextmanager
+def _file_edit_lock(file_path: Path):
+    """Cross-process advisory lock so parallel runners editing the same
+    benchmark_*.py serialize cleanly. Lock file lives next to target."""
+    lock_path = file_path.with_suffix(file_path.suffix + ".edit.lock")
+    fp = open(lock_path, "w")
+    try:
+        fcntl.flock(fp.fileno(), fcntl.LOCK_EX)
+        yield
+    finally:
+        fcntl.flock(fp.fileno(), fcntl.LOCK_UN)
+        fp.close()
+
+
 def _try_edit_inplace(row: dict, row_state: dict, root: Path,
                      hw: str, src_prefix: str) -> dict:
     """Apply this row's run output to benchmark_*.py.
@@ -701,6 +728,14 @@ def _try_edit_inplace(row: dict, row_state: dict, root: Path,
     if not file_path.exists():
         return {"status": "fail", "reason": f"file missing: {file_rel}"}
 
+    with _file_edit_lock(file_path):
+        return _try_edit_inplace_locked(row, row_state, root, hw, src_prefix,
+                                        file_path, file_rel)
+
+
+def _try_edit_inplace_locked(row: dict, row_state: dict, root: Path,
+                              hw: str, src_prefix: str,
+                              file_path: Path, file_rel: str) -> dict:
     locate = row.get("locate", {}) or {}
     section_substring = locate.get("section_substring", "")
     config_substring = locate.get("config_substring", "")
@@ -1026,6 +1061,11 @@ def main(argv: list[str] | None = None) -> int:
                    help="comma-separated row-id substrings to skip "
                         "(e.g. 's2pro-' to drop S2-Pro rows when --benchmarks "
                         "would otherwise pick them up via shared short names)")
+    p.add_argument("--gpu-pool", default=None,
+                   help="comma-separated GPU indices to restrict eligible "
+                        "GPUs (e.g. '0,1' for a 2-GPU pool). Use to run "
+                        "multiple runners in parallel on disjoint pools; "
+                        "default: all visible GPUs")
     p.add_argument("--rounds", type=int, default=1,
                    help="rounds per row (default 1)")
     p.add_argument("--smoke", type=int, default=None,
