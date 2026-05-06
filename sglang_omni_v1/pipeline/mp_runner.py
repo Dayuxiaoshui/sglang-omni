@@ -16,10 +16,11 @@ import socket
 from typing import Any
 
 from sglang_omni_v1.config.compiler import (
-    _allocate_endpoints,
+    IpcRuntimeDir,
     _build_relay_config,
     _detect_same_gpu_targets,
     _resolve_factory_args,
+    prepare_pipeline_runtime,
 )
 from sglang_omni_v1.config.schema import PipelineConfig, StageConfig
 from sglang_omni_v1.pipeline import Coordinator
@@ -32,6 +33,10 @@ logger = logging.getLogger(__name__)
 def _build_stage_groups(
     config: PipelineConfig,
     ctx: multiprocessing.context.BaseContext | None = None,
+    *,
+    stages_cfg: list[StageConfig] | None = None,
+    name_map: dict[str, str] | None = None,
+    endpoints: dict[str, str] | None = None,
 ) -> list[StageGroup]:
     """Compile *config* into one :class:`StageGroup` per logical stage.
 
@@ -41,8 +46,10 @@ def _build_stage_groups(
     if ctx is None:
         ctx = multiprocessing.get_context("spawn")
 
-    stages_cfg, name_map, _ = config.apply_fusion()
-    endpoints = _allocate_endpoints(config, stages=stages_cfg)
+    if stages_cfg is None or name_map is None or endpoints is None:
+        if config.endpoints.scheme == "ipc":
+            raise ValueError("_build_stage_groups requires prepared IPC endpoints")
+        stages_cfg, name_map, _, endpoints, _, _ = prepare_pipeline_runtime(config)
     stage_endpoints = {s.name: endpoints[f"stage_{s.name}"] for s in stages_cfg}
     cfg_map = {s.name: s for s in stages_cfg}
 
@@ -264,6 +271,7 @@ class MultiProcessPipelineRunner:
     def __init__(self, config: PipelineConfig):
         self._config = config
         self._coordinator: Coordinator | None = None
+        self._ipc_runtime_dir: IpcRuntimeDir | None = None
         self._groups: list[StageGroup] = []
         self._completion_task: asyncio.Task | None = None
         self._monitor_task: asyncio.Task | None = None
@@ -281,10 +289,24 @@ class MultiProcessPipelineRunner:
 
         try:
             ctx = multiprocessing.get_context("spawn")
-            groups = _build_stage_groups(self._config, ctx)
-
-            stages_cfg, _, entry_stage = self._config.apply_fusion()
-            endpoints = _allocate_endpoints(self._config, stages=stages_cfg)
+            (
+                stages_cfg,
+                name_map,
+                entry_stage,
+                endpoints,
+                self._ipc_runtime_dir,
+                _,
+            ) = prepare_pipeline_runtime(
+                self._config,
+                ipc_runtime_dir=self._ipc_runtime_dir,
+            )
+            groups = _build_stage_groups(
+                self._config,
+                ctx,
+                stages_cfg=stages_cfg,
+                name_map=name_map,
+                endpoints=endpoints,
+            )
 
             self._coordinator = Coordinator(
                 completion_endpoint=endpoints["completion"],
@@ -373,6 +395,11 @@ class MultiProcessPipelineRunner:
 
         await self._coordinator.stop()
         self._groups.clear()
+        self._coordinator = None
+
+        if self._ipc_runtime_dir is not None:
+            self._ipc_runtime_dir.close()
+            self._ipc_runtime_dir = None
 
     async def _cleanup_on_failure(self) -> None:
         """Best-effort cleanup after a failed start()."""
@@ -401,3 +428,7 @@ class MultiProcessPipelineRunner:
             except Exception:
                 pass
             self._coordinator = None
+
+        if self._ipc_runtime_dir is not None:
+            self._ipc_runtime_dir.close()
+            self._ipc_runtime_dir = None
