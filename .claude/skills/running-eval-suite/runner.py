@@ -204,7 +204,7 @@ def parse_gpu_status() -> tuple[list[dict], str | None]:
     try:
         out = subprocess.check_output(
             ["nvidia-smi",
-             "--query-gpu=index,memory.used,memory.total,utilization.gpu",
+             "--query-gpu=index,memory.used,memory.total,utilization.gpu,uuid",
              "--format=csv,noheader,nounits"],
             text=True, timeout=5,
         )
@@ -215,7 +215,7 @@ def parse_gpu_status() -> tuple[list[dict], str | None]:
     rows = []
     for line in out.strip().splitlines():
         parts = [p.strip() for p in line.split(",")]
-        if len(parts) != 4:
+        if len(parts) != 5:
             continue
         try:
             rows.append({
@@ -223,6 +223,7 @@ def parse_gpu_status() -> tuple[list[dict], str | None]:
                 "mem_used_mb": int(parts[1]),
                 "mem_total_mb": int(parts[2]),
                 "util_pct": int(parts[3]),
+                "uuid": parts[4],
             })
         except ValueError:
             continue
@@ -230,7 +231,32 @@ def parse_gpu_status() -> tuple[list[dict], str | None]:
 
 
 def free_gpu_indices(gpus: list[dict], free_thresh_mb: int = 1000) -> list[int]:
-    return [g["index"] for g in gpus if g["mem_used_mb"] < free_thresh_mb]
+    # A GPU counts as free if either: (a) memory below threshold, or
+    # (b) no compute process is bound to it. Case (b) handles orphaned
+    # CUDA contexts left by previous killed processes.
+    busy_gpu_uuids = _gpus_with_active_processes()
+    out: list[int] = []
+    for g in gpus:
+        if g["mem_used_mb"] < free_thresh_mb:
+            out.append(g["index"])
+            continue
+        uuid = g.get("uuid")
+        if uuid and uuid not in busy_gpu_uuids:
+            out.append(g["index"])
+    return out
+
+
+def _gpus_with_active_processes() -> set[str]:
+    try:
+        out = subprocess.check_output(
+            ["nvidia-smi",
+             "--query-compute-apps=gpu_uuid",
+             "--format=csv,noheader,nounits"],
+            text=True, timeout=5,
+        )
+    except (FileNotFoundError, subprocess.SubprocessError):
+        return set()
+    return {ln.strip() for ln in out.strip().splitlines() if ln.strip()}
 
 
 def gpu_busy_processes() -> list[dict]:
