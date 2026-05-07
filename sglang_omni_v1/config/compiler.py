@@ -11,7 +11,6 @@ from typing import Any
 from sglang_omni_v1.config.schema import PipelineConfig, StageConfig
 from sglang_omni_v1.utils import import_string
 
-
 # ------------------------------------------------------------------
 # Factory args
 # ------------------------------------------------------------------
