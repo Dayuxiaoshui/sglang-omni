@@ -36,7 +36,8 @@ from fastapi import APIRouter
 from pydantic import BaseModel
 
 from sglang_omni_v1.client import Client
-from sglang_omni_v1.config import PipelineConfig, compile_pipeline
+from sglang_omni_v1.config import PipelineConfig
+from sglang_omni_v1.pipeline.mp_runner import MultiProcessPipelineRunner
 from sglang_omni_v1.profiler.profiler_control import ProfilerControlClient
 from sglang_omni_v1.serve.openai_api import create_app
 
@@ -74,17 +75,6 @@ def _default_template(profiler_dir: str, run_id: str) -> str:
 # ---------------------------------------------------------------------------
 # Server lifecycle
 # ---------------------------------------------------------------------------
-
-
-def _collect_stage_control_endpoints(stages) -> dict[str, str]:
-    """Derive {stage_name: control_plane_recv_endpoint} from runtime Stage objects."""
-    out: dict[str, str] = {}
-    for st in stages:
-        ep = st.control_plane.recv_endpoint
-        if not ep:
-            raise RuntimeError(f"Cannot resolve control endpoint for stage={st.name}")
-        out[st.name] = ep
-    return out
 
 
 class StartReq(BaseModel):
@@ -131,105 +121,63 @@ async def _run_server(
     log_level: str = "info",
     client_kwargs: dict[str, Any] | None = None,
 ) -> None:
-    """Compile the pipeline, start stages, and run the OpenAI server.
+    """Start the pipeline and run the OpenAI server.
 
     This is the async entry point.  For a blocking call use :func:`launch_server`.
     """
     # 0. Check port availability before loading models
     port = _find_available_port(host, port)
 
-    # Determine whether we need multi-process mode.  This is true when
-    # stages span more than one GPU *or* any stage uses tensor parallelism.
     gpu_ids: set[int] = set()
     for v in pipeline_config.gpu_placement.values():
         if isinstance(v, list):
             gpu_ids.update(v)
         else:
             gpu_ids.add(v)
-    any_tp = any(s.tp_size > 1 for s in pipeline_config.stages)
-    needs_mp = len(gpu_ids) > 1 or any_tp
     logger.info(
-        "GPU placement: %s → %s",
+        "GPU placement: %s",
         dict(pipeline_config.gpu_placement),
-        "multi-process" if needs_mp else "single-process",
     )
 
-    if needs_mp:
-        from sglang_omni_v1.pipeline.mp_runner import MultiProcessPipelineRunner
+    mp_runner = MultiProcessPipelineRunner(pipeline_config)
+    profiler_ctl: ProfilerControlClient | None = None
+    startup_timeout = float(os.environ.get("SGLANG_OMNI_STARTUP_TIMEOUT", "600"))
+    await mp_runner.start(timeout=startup_timeout)
+    coordinator = mp_runner.coordinator
+    logger.info(
+        "Pipeline '%s' started (%d stages, %d GPU(s))",
+        pipeline_config.name,
+        len(mp_runner.stage_endpoints),
+        len(gpu_ids),
+    )
 
-        mp_runner = MultiProcessPipelineRunner(pipeline_config)
-        startup_timeout = float(os.environ.get("SGLANG_OMNI_STARTUP_TIMEOUT", "600"))
-        await mp_runner.start(timeout=startup_timeout)
-        coordinator = mp_runner.coordinator
-        logger.info(
-            "Pipeline '%s' started (multi-process, %d GPU(s))",
-            pipeline_config.name,
-            len(gpu_ids),
+    try:
+        cl_kwargs = client_kwargs or {}
+        client = Client(coordinator, **cl_kwargs)
+        app = create_app(
+            client,
+            model_name=model_name or pipeline_config.name,
         )
 
-        try:
-            cl_kwargs = client_kwargs or {}
-            client = Client(coordinator, **cl_kwargs)
-            app = create_app(
-                client,
-                model_name=model_name or pipeline_config.name,
-            )
+        profiler_dir = os.environ.get("SGLANG_TORCH_PROFILER_DIR")
+        profiler_ctl = ProfilerControlClient(mp_runner.stage_endpoints)
+        _mount_profiler_routes(app, profiler_ctl, profiler_dir)
 
-            config = uvicorn.Config(
-                app,
-                host=host,
-                port=port,
-                log_level=log_level,
-                timeout_keep_alive=120,
-            )
-            server = uvicorn.Server(config)
-            await server.serve()
-        finally:
-            logger.info("Shutting down pipeline …")
-            await mp_runner.stop()
-            logger.info("Pipeline stopped.")
-    else:
-        coordinator, stages = compile_pipeline(pipeline_config)
-        stage_endpoints = _collect_stage_control_endpoints(stages)
-
-        # Start coordinator + all stages as async tasks
-        await coordinator.start()
-        completion_task = asyncio.create_task(coordinator.run_completion_loop())
-        stage_tasks = [asyncio.create_task(s.run()) for s in stages]
-        logger.info(
-            "Pipeline '%s' started (%d stages)",
-            pipeline_config.name,
-            len(stages),
+        config = uvicorn.Config(
+            app,
+            host=host,
+            port=port,
+            log_level=log_level,
+            timeout_keep_alive=120,
         )
-
-        try:
-            cl_kwargs = client_kwargs or {}
-            client = Client(coordinator, **cl_kwargs)
-            app = create_app(
-                client,
-                model_name=model_name or pipeline_config.name,
-            )
-
-            profiler_dir = os.environ.get("SGLANG_TORCH_PROFILER_DIR")
-            profiler_ctl = ProfilerControlClient(stage_endpoints)
-            _mount_profiler_routes(app, profiler_ctl, profiler_dir)
-
-            config = uvicorn.Config(
-                app,
-                host=host,
-                port=port,
-                log_level=log_level,
-                timeout_keep_alive=120,
-            )
-            server = uvicorn.Server(config)
-            await server.serve()
-        finally:
-            logger.info("Shutting down pipeline …")
-            for t in stage_tasks:
-                t.cancel()
-            completion_task.cancel()
-            await coordinator.stop()
-            logger.info("Pipeline stopped.")
+        server = uvicorn.Server(config)
+        await server.serve()
+    finally:
+        logger.info("Shutting down pipeline …")
+        if profiler_ctl is not None:
+            await profiler_ctl.close()
+        await mp_runner.stop()
+        logger.info("Pipeline stopped.")
 
 
 def launch_server(
@@ -241,7 +189,7 @@ def launch_server(
     log_level: str = "info",
     client_kwargs: dict[str, Any] | None = None,
 ) -> None:
-    """Blocking helper: compile pipeline and start the OpenAI-compatible server.
+    """Blocking helper: start the OpenAI-compatible server.
 
     Args:
         pipeline_config: Declarative pipeline configuration.

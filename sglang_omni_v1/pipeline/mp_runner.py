@@ -32,6 +32,10 @@ logger = logging.getLogger(__name__)
 def _build_stage_groups(
     config: PipelineConfig,
     ctx: multiprocessing.context.BaseContext | None = None,
+    *,
+    stages_cfg: list[StageConfig] | None = None,
+    name_map: dict[str, str] | None = None,
+    endpoints: dict[str, str] | None = None,
 ) -> list[StageGroup]:
     """Compile *config* into one :class:`StageGroup` per logical stage.
 
@@ -41,8 +45,10 @@ def _build_stage_groups(
     if ctx is None:
         ctx = multiprocessing.get_context("spawn")
 
-    stages_cfg, name_map, _ = config.apply_fusion()
-    endpoints = _allocate_endpoints(config, stages=stages_cfg)
+    if stages_cfg is None or name_map is None:
+        stages_cfg, name_map, _ = config.apply_fusion()
+    if endpoints is None:
+        endpoints = _allocate_endpoints(config, stages=stages_cfg)
     stage_endpoints = {s.name: endpoints[f"stage_{s.name}"] for s in stages_cfg}
     cfg_map = {s.name: s for s in stages_cfg}
 
@@ -265,6 +271,7 @@ class MultiProcessPipelineRunner:
         self._config = config
         self._coordinator: Coordinator | None = None
         self._groups: list[StageGroup] = []
+        self._stage_endpoints: dict[str, str] = {}
         self._completion_task: asyncio.Task | None = None
         self._monitor_task: asyncio.Task | None = None
         self._started = False
@@ -275,16 +282,27 @@ class MultiProcessPipelineRunner:
             raise RuntimeError("Runner not started")
         return self._coordinator
 
+    @property
+    def stage_endpoints(self) -> dict[str, str]:
+        if not self._started:
+            raise RuntimeError("Runner not started")
+        return dict(self._stage_endpoints)
+
     async def start(self, timeout: float = 120.0) -> None:
         if self._started:
             raise RuntimeError("Already started")
 
         try:
             ctx = multiprocessing.get_context("spawn")
-            groups = _build_stage_groups(self._config, ctx)
-
-            stages_cfg, _, entry_stage = self._config.apply_fusion()
+            stages_cfg, name_map, entry_stage = self._config.apply_fusion()
             endpoints = _allocate_endpoints(self._config, stages=stages_cfg)
+            groups = _build_stage_groups(
+                self._config,
+                ctx,
+                stages_cfg=stages_cfg,
+                name_map=name_map,
+                endpoints=endpoints,
+            )
 
             self._coordinator = Coordinator(
                 completion_endpoint=endpoints["completion"],
@@ -315,6 +333,9 @@ class MultiProcessPipelineRunner:
                     group.stage_name, group.leader_endpoint
                 )
 
+            self._stage_endpoints = {
+                group.stage_name: group.leader_endpoint for group in self._groups
+            }
             self._started = True
             self._monitor_task = asyncio.create_task(self._monitor_children())
 
@@ -373,6 +394,7 @@ class MultiProcessPipelineRunner:
 
         await self._coordinator.stop()
         self._groups.clear()
+        self._stage_endpoints.clear()
 
     async def _cleanup_on_failure(self) -> None:
         """Best-effort cleanup after a failed start()."""
@@ -386,6 +408,7 @@ class MultiProcessPipelineRunner:
                     p.kill()
                     p.join(timeout=2)
         self._groups.clear()
+        self._stage_endpoints.clear()
 
         if self._completion_task is not None:
             self._completion_task.cancel()
