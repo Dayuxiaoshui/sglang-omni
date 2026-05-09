@@ -7,7 +7,7 @@ from sglang_omni.models.qwen3_omni.components.image_encoder import Qwen3OmniImag
 from sglang_omni.models.qwen3_omni.components.preprocessor import Qwen3OmniPreprocessor
 from sglang_omni.models.qwen3_omni.components.thinker import Qwen3OmniSplitThinker
 
-from . import config
+from . import config, encoder_adapter  # noqa: F401 — encoder_adapter registers on import
 
 __all__ = [
     "Qwen3OmniPreprocessor",
