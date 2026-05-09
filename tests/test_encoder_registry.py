@@ -8,8 +8,8 @@ from dataclasses import dataclass
 import pytest
 
 from sglang_omni.encoders.registry import (
-    EncoderSpec,
     _REGISTRY,
+    EncoderSpec,
     get_encoder_spec,
     list_encoder_names,
     register_encoder,

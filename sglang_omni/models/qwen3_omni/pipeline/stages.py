@@ -14,10 +14,7 @@ from sglang_omni.engines.ar.sglang_backend.server_args_builder import (
     apply_encoder_mem_reserve,
     build_sglang_server_args,
 )
-from sglang_omni.engines.omni import (
-    create_ar_engine,
-    create_sglang_ar_engine,
-)
+from sglang_omni.engines.omni import create_ar_engine, create_sglang_ar_engine
 from sglang_omni.executors import EngineExecutor, PreprocessingExecutor
 from sglang_omni.models.qwen3_omni.components.audio_encoder import Qwen3OmniAudioEncoder
 from sglang_omni.models.qwen3_omni.components.image_encoder import Qwen3OmniImageEncoder

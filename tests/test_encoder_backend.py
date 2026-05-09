@@ -49,9 +49,7 @@ def test_sglang_backend_forward_before_load_is_explicit() -> None:
         config_loader=lambda _path: object(),
         module_factory=lambda _cfg: _DummyEncoder(),
     )
-    backend = SGLangEncoderBackend(
-        spec, model_path="ignored", device="cpu", tp_size=1
-    )
+    backend = SGLangEncoderBackend(spec, model_path="ignored", device="cpu", tp_size=1)
     with pytest.raises(RuntimeError, match="forward called before load"):
         backend.forward(features=torch.zeros(1, 4))
 

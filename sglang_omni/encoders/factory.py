@@ -12,11 +12,7 @@ import torch.nn as nn
 from sglang_omni.engines.omni.types import SchedulerRequest
 from sglang_omni.executors import EngineExecutor
 
-from .backend import (
-    EncoderBackend,
-    LocalEncoderBackend,
-    SGLangEncoderBackend,
-)
+from .backend import EncoderBackend, LocalEncoderBackend, SGLangEncoderBackend
 from .registry import EncoderSpec, get_encoder_spec
 from .scheduler import EncoderScheduler
 
