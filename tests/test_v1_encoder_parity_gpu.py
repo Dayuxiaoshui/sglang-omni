@@ -55,11 +55,13 @@ def _run_subprocess(
 ) -> None:
     """Run a parity-helper script and fail the test on non-zero exit.
 
-    Streams the child's stdout/stderr line-by-line instead of using
-    ``subprocess.run(capture_output=True)``: under pytest's capture
-    settings the latter can deadlock the child during heavy NCCL init
-    output (observed on Qwen3-Omni audio-tower bring-up), even though
-    the same command runs cleanly outside pytest.
+    Pipes child stdout / stderr to a per-test log file rather than to
+    ``subprocess.PIPE``. Under pytest's capture settings, NCCL's
+    ``ncclCommInitRank`` deadlocks reproducibly when the child writes
+    to a pipe — but is fine when writing to a regular file. Suspected
+    interaction between pytest's faulthandler / fd inheritance and
+    NCCL's bootstrap, but the file-redirect avoids the issue
+    completely.
     """
     env = os.environ.copy()
     env["PYTHONPATH"] = str(_REPO_ROOT)
@@ -74,31 +76,30 @@ def _run_subprocess(
     env.setdefault("NCCL_P2P_DISABLE", "1")
     env.update(extra_env or {})
 
-    proc = subprocess.Popen(
-        [sys.executable, "-u", str(script)],
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
-    )
-    captured: list[str] = []
-    try:
-        for line in proc.stdout:  # type: ignore[union-attr]
-            captured.append(line)
-        proc.wait(timeout=timeout_s)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        proc.wait()
-        pytest.fail(
-            f"subprocess {script.name} exceeded {timeout_s}s\n"
-            f"--- output ---\n{''.join(captured)}"
+    log_path = output_path.with_suffix(".log")
+    with open(log_path, "w") as log:
+        proc = subprocess.Popen(
+            [sys.executable, "-u", str(script)],
+            env=env,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
         )
+        try:
+            proc.wait(timeout=timeout_s)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait()
+            log.flush()
+            pytest.fail(
+                f"subprocess {script.name} exceeded {timeout_s}s\n"
+                f"--- log ({log_path}) ---\n{log_path.read_text()}"
+            )
 
     if proc.returncode != 0:
         pytest.fail(
             f"subprocess {script.name} exited {proc.returncode}\n"
-            f"--- output ---\n{''.join(captured)}"
+            f"--- log ({log_path}) ---\n{log_path.read_text()}"
         )
 
 
@@ -183,6 +184,8 @@ def _spawn_tp_run(tp_size: int, tmp_path: Path) -> Path:
     output_paths = [tmp_path / f"sglang_tp{tp_size}_rank{r}.pt" for r in range(tp_size)]
 
     procs: list[subprocess.Popen] = []
+    log_paths: list[Path] = []
+    log_handles: list = []
     for rank in range(tp_size):
         env = os.environ.copy()
         env["PYTHONPATH"] = str(_REPO_ROOT)
@@ -199,30 +202,42 @@ def _spawn_tp_run(tp_size: int, tmp_path: Path) -> Path:
         # Map each rank to a distinct physical CUDA device. The subprocess
         # treats it as cuda:0 internally because we only expose one.
         env["CUDA_VISIBLE_DEVICES"] = str(rank)
+
+        # File-redirect rather than PIPE — see _run_subprocess docstring
+        # for the pytest+NCCL-bootstrap deadlock reason.
+        log_path = output_paths[rank].with_suffix(".log")
+        log_paths.append(log_path)
+        log_handle = open(log_path, "w")
+        log_handles.append(log_handle)
         procs.append(
             subprocess.Popen(
-                [sys.executable, str(_HELPERS_DIR / "run_audio_sglang.py")],
+                [sys.executable, "-u", str(_HELPERS_DIR / "run_audio_sglang.py")],
                 env=env,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
+                stdout=log_handle,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
             )
         )
 
     failures: list[str] = []
     for rank, proc in enumerate(procs):
         try:
-            stdout, stderr = proc.communicate(timeout=900)
+            proc.wait(timeout=900)
         except subprocess.TimeoutExpired:
             proc.kill()
-            stdout, stderr = proc.communicate()
+            proc.wait()
             failures.append(f"rank {rank}: timeout")
         else:
             if proc.returncode != 0:
                 failures.append(
                     f"rank {rank}: exit={proc.returncode}\n"
-                    f"stdout:\n{stdout}\nstderr:\n{stderr}"
+                    f"--- log ({log_paths[rank]}) ---\n{log_paths[rank].read_text()}"
                 )
+    for handle in log_handles:
+        try:
+            handle.close()
+        except Exception:
+            pass
 
     if failures:
         pytest.fail("tp_size=%d run failed:\n%s" % (tp_size, "\n---\n".join(failures)))
