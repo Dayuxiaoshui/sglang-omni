@@ -44,9 +44,6 @@ def _init_parallel_state() -> None:
         init_distributed_environment,
         initialize_model_parallel,
     )
-    from sglang.srt.distributed.parallel_state import (
-        get_default_distributed_backend,
-    )
 
     tp_size = int(os.environ.get("TP_SIZE", "1"))
     tp_rank = int(os.environ.get("TP_RANK", "0"))
@@ -54,7 +51,7 @@ def _init_parallel_state() -> None:
     master_addr = os.environ.get("MASTER_ADDR", "127.0.0.1")
 
     init_distributed_environment(
-        backend=get_default_distributed_backend("cuda"),
+        backend="nccl",
         world_size=tp_size,
         rank=tp_rank,
         local_rank=tp_rank,

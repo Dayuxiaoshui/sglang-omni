@@ -161,10 +161,7 @@ class SGLangEncoderWorker:
             init_distributed_environment,
             initialize_model_parallel,
         )
-        from sglang.srt.distributed.parallel_state import (
-            get_default_distributed_backend,
-            get_tp_group,
-        )
+        from sglang.srt.distributed.parallel_state import get_tp_group
         from sglang.srt.managers.io_struct import LoadConfig
         from sglang.srt.model_executor.model_runner import (
             set_global_server_args_for_scheduler,
@@ -209,7 +206,7 @@ class SGLangEncoderWorker:
         # ``SGLANG_ONE_VISIBLE_DEVICE_PER_PROCESS`` in the TP > 1 lane
         # and the ``cuda_device == 0`` invariant in both lanes.
         init_distributed_environment(
-            backend=get_default_distributed_backend("cuda"),
+            backend="nccl",
             world_size=self.tp_size,
             rank=self.tp_rank,
             distributed_init_method=dist_init_method,
