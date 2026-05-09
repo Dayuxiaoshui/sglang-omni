@@ -78,7 +78,14 @@ def _run_subprocess(
 
 def _load_audio_embeds(path: Path) -> torch.Tensor:
     blob = torch.load(path, map_location="cpu", weights_only=True)
-    return blob["audio_embeds"]
+    embeds: torch.Tensor = blob["audio_embeds"]
+    # The local HF audio tower returns ``(T_unmasked, hidden)`` while
+    # sglang main's TP-aware variant keeps an outer batch dim of 1.
+    # Squeeze leading 1-dims so the parity assert focuses on values,
+    # not packaging.
+    while embeds.ndim > 2 and embeds.shape[0] == 1:
+        embeds = embeds.squeeze(0)
+    return embeds
 
 
 # ---------------------------------------------------------------------------

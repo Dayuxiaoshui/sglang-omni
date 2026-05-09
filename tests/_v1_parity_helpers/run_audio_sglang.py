@@ -114,7 +114,16 @@ def _load_audio_weights(
     encoder: torch.nn.Module,
     model_path: str,
 ) -> set[str]:
-    """Load audio-tower weights with shard-aware QKV fusion."""
+    """Load audio-tower weights with shard-aware QKV fusion.
+
+    Mirrors the renames :class:`Qwen3OmniMoeForConditionalGeneration.load_weights`
+    applies for the audio tower:
+
+    - ``self_attn.q_proj`` / ``self_attn.k_proj`` / ``self_attn.v_proj``
+      fuse into ``self_attn.qkv_proj`` (sharded by Q/K/V).
+    - ``self_attn.out_proj`` renames to ``self_attn.proj`` (sglang
+      uses the shorter name on its ``RowParallelLinear`` output).
+    """
     from sglang.srt.model_loader.weight_utils import default_weight_loader
 
     from sglang_omni_v1.models.weight_loader import load_weights_by_prefix
@@ -128,6 +137,10 @@ def _load_audio_weights(
     skipped: list[str] = []
 
     for name, w in weights.items():
+        # 1. ``self_attn.out_proj`` -> ``self_attn.proj``
+        name = name.replace(".self_attn.out_proj", ".self_attn.proj")
+
+        # 2. QKV fusion (q_proj/k_proj/v_proj -> qkv_proj with shard_id).
         for fused_name, raw_name, shard_id in AUDIO_STACKED_PARAMS_MAPPING:
             if raw_name not in name:
                 continue
