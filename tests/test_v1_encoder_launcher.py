@@ -311,9 +311,13 @@ def test_real_factory_signature_defaults_to_local():
 
 
 @pytest.mark.parametrize(
+    # Keys that reach the helper through ``**overrides``. ``tp_size``,
+    # ``base_gpu_id``, ``dist_init_addr``, ``dtype``, ``load_format`` are
+    # already explicit helper kwargs — Python rejects duplicate keyword
+    # values with a TypeError before our protected-key check can run, so
+    # those are covered at the worker layer instead.
     "key",
     [
-        "tp_size",
         "tp_rank",
         "gpu_id",
         "nccl_port",
