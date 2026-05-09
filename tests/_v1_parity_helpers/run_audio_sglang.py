@@ -44,7 +44,9 @@ def _init_parallel_state() -> None:
         init_distributed_environment,
         initialize_model_parallel,
     )
-    from sglang.srt.utils import get_default_distributed_backend
+    from sglang.srt.distributed.parallel_state import (
+        get_default_distributed_backend,
+    )
 
     tp_size = int(os.environ.get("TP_SIZE", "1"))
     tp_rank = int(os.environ.get("TP_RANK", "0"))

@@ -161,13 +161,15 @@ class SGLangEncoderWorker:
             init_distributed_environment,
             initialize_model_parallel,
         )
-        from sglang.srt.distributed.parallel_state import get_tp_group
+        from sglang.srt.distributed.parallel_state import (
+            get_default_distributed_backend,
+            get_tp_group,
+        )
         from sglang.srt.managers.io_struct import LoadConfig
         from sglang.srt.model_executor.model_runner import (
             set_global_server_args_for_scheduler,
         )
         from sglang.srt.model_loader import get_model
-        from sglang.srt.utils import get_default_distributed_backend
 
         try:
             from sglang.srt.managers.io_struct import DeviceConfig
