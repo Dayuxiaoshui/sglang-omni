@@ -31,6 +31,7 @@ def build_encoder_executor(
     tp_rank: int = 0,
     gpu_id: int | None = None,
     nccl_port: int | None = None,
+    master_addr: str | None = None,
     max_batch_size: int = 32,
     use_cache: bool = False,
     cache_size: int | None = None,
@@ -63,12 +64,21 @@ def build_encoder_executor(
         device: GPU device the leader rank executes on.
         dtype: Optional torch dtype passed through to the backend.
         tp_size: TP world size for this encoder stage.
+        tp_rank, gpu_id, nccl_port, master_addr: TP rendezvous parameters,
+            forwarded to :class:`EncoderScheduler` and (for ``tp_rank``) to
+            :class:`SGLangEncoderBackend`. Accepted now so the public API
+            does not grow again when the broadcast path is enabled.
         max_batch_size, use_cache, cache_size, cache_max_bytes,
         cache_device, request_cost_fn, max_batch_cost: forwarded to
         :class:`EncoderScheduler`.
         backend_override: For tests — supply a pre-built backend and skip
         the selection rules above.
     """
+    if tp_size < 1:
+        # Fail before _select_backend constructs the local module so an
+        # invalid config never pays the local-tower load cost just to
+        # surface the error from EncoderScheduler.
+        raise ValueError(f"tp_size must be >= 1, got {tp_size}")
     spec = get_encoder_spec(encoder_name)
     backend = backend_override or _select_backend(
         spec=spec,
@@ -87,6 +97,7 @@ def build_encoder_executor(
         tp_rank=tp_rank,
         gpu_id=gpu_id,
         nccl_port=nccl_port,
+        master_addr=master_addr,
         max_batch_size=max_batch_size,
         use_cache=use_cache,
         cache_size=cache_size,

@@ -50,6 +50,38 @@ def test_tp_rank_must_be_in_range() -> None:
         )
 
 
+def test_factory_validates_tp_size_before_constructing_backend() -> None:
+    """``build_encoder_executor`` rejects ``tp_size<1`` without ever
+    invoking the local module factory."""
+    from sglang_omni.encoders.factory import build_encoder_executor
+    from sglang_omni.encoders.registry import _REGISTRY, EncoderSpec
+
+    name = "_test_factory_validates_tp_size"
+    _REGISTRY[name] = EncoderSpec(
+        name=name,
+        adapter_factory=lambda stage_name: object(),
+    )
+    invocations = 0
+
+    def _should_not_run() -> nn.Module:
+        nonlocal invocations
+        invocations += 1
+        return _IdentityEncoder()
+
+    try:
+        with pytest.raises(ValueError, match="tp_size must be"):
+            build_encoder_executor(
+                name,
+                stage_name="stage",
+                model_path="ignored",
+                local_module_factory=_should_not_run,
+                tp_size=0,
+            )
+    finally:
+        _REGISTRY.pop(name, None)
+    assert invocations == 0
+
+
 def test_backend_must_be_nn_module() -> None:
     class NotAModule:
         pass

@@ -52,6 +52,16 @@ class EncoderScheduler(Engine):
             ``**model_inputs``.
         device: Device the leader rank executes on.
         tp_size: World size of the TP group for this encoder (1 = no TP).
+        tp_rank: Rank of this process within the TP group. Validated to
+            satisfy ``0 <= tp_rank < tp_size``.
+        gpu_id: CUDA device index this rank owns. Defaults to
+            ``device.index`` so callers can pass either a ``torch.device``
+            or a separate ``gpu_id`` integer (the AR engines pass both).
+        nccl_port: NCCL rendezvous port. Required for ``tp_size > 1``
+            once the broadcast path lands; ignored at ``tp_size == 1``.
+        master_addr: NCCL/torch.distributed master address. Same status
+            as ``nccl_port``: accepted now so the public API doesn't
+            grow again when the TP path is enabled.
         max_batch_size: Forwarded to ``EncoderBatchPlanner``.
         use_cache: Forwarded to ``OmniEngine`` (encoder output cache).
         cache_size: Forwarded to ``OmniEngine``.
@@ -70,6 +80,7 @@ class EncoderScheduler(Engine):
         tp_rank: int = 0,
         gpu_id: int | None = None,
         nccl_port: int | None = None,
+        master_addr: str | None = None,
         max_batch_size: int = 32,
         use_cache: bool = False,
         cache_size: int | None = None,
@@ -89,6 +100,7 @@ class EncoderScheduler(Engine):
         self._tp_rank = int(tp_rank)
         self._gpu_id = int(gpu_id) if gpu_id is not None else self._device.index
         self._nccl_port = int(nccl_port) if nccl_port is not None else None
+        self._master_addr = master_addr
         if self._tp_size < 1:
             raise ValueError(f"tp_size must be >= 1, got {tp_size}")
         if self._tp_rank < 0 or self._tp_rank >= self._tp_size:
