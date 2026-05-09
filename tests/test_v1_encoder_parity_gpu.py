@@ -59,6 +59,12 @@ def _run_subprocess(
     env["MODEL_PATH"] = QWEN3_OMNI_MODEL
     env["OUTPUT_PATH"] = str(output_path)
     env["DTYPE"] = "bfloat16"
+    # Pin NCCL to the loopback interface for the local-host tests so
+    # NCCL doesn't hang trying to enumerate IB / Ethernet devices that
+    # may or may not be reachable from inside the container.
+    env.setdefault("NCCL_SOCKET_IFNAME", "lo")
+    env.setdefault("NCCL_IB_DISABLE", "1")
+    env.setdefault("NCCL_P2P_DISABLE", "1")
     env.update(extra_env or {})
 
     proc = subprocess.run(
@@ -167,6 +173,9 @@ def _spawn_tp_run(tp_size: int, tmp_path: Path) -> Path:
         env["TP_RANK"] = str(rank)
         env["NCCL_PORT"] = nccl_port
         env["MASTER_ADDR"] = "127.0.0.1"
+        env.setdefault("NCCL_SOCKET_IFNAME", "lo")
+        env.setdefault("NCCL_IB_DISABLE", "1")
+        env.setdefault("NCCL_P2P_DISABLE", "1")
         # Map each rank to a distinct physical CUDA device. The subprocess
         # treats it as cuda:0 internally because we only expose one.
         env["CUDA_VISIBLE_DEVICES"] = str(rank)
