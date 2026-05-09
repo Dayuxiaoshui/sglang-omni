@@ -202,6 +202,13 @@ def _spawn_tp_run(tp_size: int, tmp_path: Path) -> Path:
         # Map each rank to a distinct physical CUDA device. The subprocess
         # treats it as cuda:0 internally because we only expose one.
         env["CUDA_VISIBLE_DEVICES"] = str(rank)
+        # ``local_rank`` we pass to torch.distributed is the rank
+        # identity (used by sglang's local-master checks), not a CUDA
+        # device index — but pynccl by default does
+        # ``torch.cuda.device(local_rank)`` which would crash on rank>0
+        # because only one GPU is visible. This flag tells sglang's
+        # GroupCoordinator to use device_id=0 regardless.
+        env["SGLANG_ONE_VISIBLE_DEVICE_PER_PROCESS"] = "true"
 
         # File-redirect rather than PIPE — see _run_subprocess docstring
         # for the pytest+NCCL-bootstrap deadlock reason.
