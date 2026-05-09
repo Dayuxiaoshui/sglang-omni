@@ -39,25 +39,62 @@ AUDIO_STACKED_PARAMS_MAPPING: tuple[tuple[str, str, str], ...] = (
 )
 
 
-def _init_parallel_state() -> None:
+def _init_parallel_state(model_path: str):
+    """Initialise sglang's distributed + DP-attention state.
+
+    Returns ``(server_args, model_config)`` so the caller can hand them
+    to ``initialize_dp_attention`` (some sglang builds need it before
+    ``VisionAttention`` is constructed).
+    """
+    from sglang.srt.configs.model_config import ModelConfig
     from sglang.srt.distributed import (
         init_distributed_environment,
         initialize_model_parallel,
+    )
+    from sglang.srt.model_executor.model_runner import (
+        set_global_server_args_for_scheduler,
+    )
+
+    from sglang_omni_v1.scheduling.sglang_backend.encoder_server_args import (
+        build_sglang_encoder_server_args,
     )
 
     tp_size = int(os.environ.get("TP_SIZE", "1"))
     tp_rank = int(os.environ.get("TP_RANK", "0"))
     nccl_port = int(os.environ.get("NCCL_PORT", "29500"))
     master_addr = os.environ.get("MASTER_ADDR", "127.0.0.1")
+    dist_addr = f"{master_addr}:{nccl_port}"
+
+    server_args = build_sglang_encoder_server_args(
+        model_path=model_path,
+        tp_size=tp_size,
+        base_gpu_id=0,
+        dist_init_addr=dist_addr,
+    )
+    set_global_server_args_for_scheduler(server_args)
+    model_config = ModelConfig.from_server_args(server_args)
 
     init_distributed_environment(
         backend="nccl",
         world_size=tp_size,
         rank=tp_rank,
         local_rank=tp_rank,
-        distributed_init_method=f"tcp://{master_addr}:{nccl_port}",
+        distributed_init_method=f"tcp://{dist_addr}",
     )
     initialize_model_parallel(tensor_model_parallel_size=tp_size)
+
+    # Required by VisionAttention.__init__ in current sglang builds —
+    # ``get_attention_tp_size()`` asserts this has been called.
+    try:
+        from sglang.srt.layers.dp_attention import initialize_dp_attention
+    except ImportError:  # pragma: no cover - older sglang layouts
+        from sglang.srt.distributed.parallel_state import initialize_dp_attention
+    try:
+        initialize_dp_attention(server_args=server_args, model_config=model_config)
+    except TypeError:
+        initialize_dp_attention(server_args, model_config)
+
+    return server_args, model_config
 
 
 def _build_audio_encoder(model_path: str, dtype: torch.dtype, device: torch.device):
@@ -138,7 +175,7 @@ def main() -> None:
     device = torch.device("cuda", 0)
     torch.cuda.set_device(device)
 
-    _init_parallel_state()
+    _init_parallel_state(model_path)
     encoder = _build_audio_encoder(model_path, dtype, device)
     _load_audio_weights(encoder, model_path)
 
