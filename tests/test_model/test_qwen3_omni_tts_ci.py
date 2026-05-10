@@ -84,7 +84,6 @@ def _run_benchmark(
         output_dir=output_dir,
         max_samples=MAX_SAMPLES,
         max_concurrency=CONCURRENCY,
-        warmup=CONCURRENCY * 2,
         voice_clone=True,
     )
     speed_results = asyncio.run(run_omni_seedtts_benchmark(config))

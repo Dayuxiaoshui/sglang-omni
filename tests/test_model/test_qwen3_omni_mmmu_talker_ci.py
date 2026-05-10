@@ -121,7 +121,6 @@ def test_mmmu_audio_wer_and_speed(
         max_samples=MAX_SAMPLES,
         max_tokens=MAX_TOKENS,
         max_concurrency=CONCURRENCY,
-        warmup=CONCURRENCY,
         output_dir=str(tmp_path / "mmmu_audio"),
         enable_audio=True,
         repo_id=DATASETS["mmmu-ci-50"],

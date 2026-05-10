@@ -68,28 +68,9 @@ class BenchmarkRunner:
         send_fn: SendFn,
     ) -> None:
         count = min(self.config.warmup, len(samples))
-        if count == 0:
-            return
-        logger.info(
-            "Warmup (%d requests, max_concurrency=%s)...",
-            count,
-            self.config.max_concurrency,
-        )
-        semaphore = (
-            asyncio.Semaphore(self.config.max_concurrency)
-            if self.config.max_concurrency
-            else None
-        )
-
-        async def _limited(sample: Any) -> RequestResult:
-            if semaphore:
-                async with semaphore:
-                    return await send_fn(session, sample)
-            return await send_fn(session, sample)
-
-        tasks = [asyncio.create_task(_limited(samples[i])) for i in range(count)]
-        results = await asyncio.gather(*tasks)
-        for i, result in enumerate(results):
+        logger.info("Warmup (%d requests)...", count)
+        for i in range(count):
+            result = await send_fn(session, samples[i])
             status = "ok" if result.is_success else result.error
             logger.info("  warmup %d/%d: %s", i + 1, count, status)
 
