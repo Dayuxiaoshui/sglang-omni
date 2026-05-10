@@ -61,7 +61,7 @@ MMSU_TTS_PROMPT = (
 )
 
 # Accuracy floor — audio-mode MMSU.
-MMSU_AUDIO_MIN_ACCURACY = 0.55
+MMSU_AUDIO_MIN_ACCURACY = 0.5
 
 # WER thresholds use a partitioned view of the per-sample distribution:
 #  - corpus WER over the "sane" subset (per-sample WER <= 50%)

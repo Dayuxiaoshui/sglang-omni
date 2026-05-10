@@ -15,14 +15,12 @@ permissions:
 
 jobs:
   unit-test:
-    # TEMP_SKIP_for_warmup_verify: original CI gate below; restore by removing `if: false` and uncommenting.
-    if: false
     # CI gate — runs on workflow_dispatch, or on non-draft PRs carrying the `run-ci` label.
     # Keep in sync with the same gate in test-examples.yaml / test-qwen3-omni-ci-v1.yaml / test-s2pro-ci-v1.yaml.
-    # if: >-
-    #   github.event_name == 'workflow_dispatch' ||
-    #   (!github.event.pull_request.draft &&
-    #    contains(github.event.pull_request.labels.*.name, 'run-ci'))
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (!github.event.pull_request.draft &&
+       contains(github.event.pull_request.labels.*.name, 'run-ci'))
     runs-on: [self-hosted]
     container:
       image: frankleeeee/sglang-omni:dev # we lock to this version to avoid repeated docker pull

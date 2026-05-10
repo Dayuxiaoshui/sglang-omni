@@ -55,14 +55,12 @@ permissions:
 jobs:
   docs:
     name: docs
-    # TEMP_SKIP_for_warmup_verify: original CI gate below; restore by removing `if: false` and uncommenting.
-    if: false
     # CI gate — runs on workflow_dispatch, or on non-draft PRs carrying the `run-ci` label.
     # Keep in sync with the same gate in test.yaml / test-examples.yaml / test-s2pro-ci-v1.yaml.
-    # if: >-
-    #   github.event_name == 'workflow_dispatch' ||
-    #   (!github.event.pull_request.draft &&
-    #    contains(github.event.pull_request.labels.*.name, 'run-ci'))
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (!github.event.pull_request.draft &&
+       contains(github.event.pull_request.labels.*.name, 'run-ci'))
     runs-on: [self-hosted]
     timeout-minutes: 15
     container:
@@ -107,7 +105,6 @@ jobs:
 
   stage-1-thinker:
     name: stage 1 - thinker length integration
-    if: false  # TEMP_SKIP_for_warmup_verify
     needs: docs
     runs-on: [self-hosted]
     timeout-minutes: 20
@@ -141,7 +138,7 @@ jobs:
 
   stage-2-tts:
     name: stage 2 - TTS speed + WER
-    needs: []  # TEMP_was_docs (restore: needs: docs)
+    needs: docs
     runs-on: [self-hosted]
     timeout-minutes: 15
     container:
@@ -180,7 +177,6 @@ jobs:
 
   stage-3-mmmu:
     name: stage 3 - MMMU accuracy + speed
-    if: false  # TEMP_SKIP_for_warmup_verify
     needs: docs
     runs-on: [self-hosted]
     timeout-minutes: 20
@@ -218,7 +214,7 @@ jobs:
 
   stage-4-mmmu-talker:
     name: stage 4 - MMMU Talker
-    needs: []  # TEMP_was_docs (restore: needs: docs)
+    needs: docs
     runs-on: [self-hosted]
     timeout-minutes: 15
     container:
@@ -255,7 +251,6 @@ jobs:
 
   stage-5-mmsu:
     name: stage 5 - MMSU accuracy + speed
-    if: false  # TEMP_SKIP_for_warmup_verify
     needs: docs
     runs-on: [self-hosted]
     timeout-minutes: 20
@@ -294,7 +289,7 @@ jobs:
 
   stage-6-mmsu-talker:
     name: stage 6 - MMSU Talker
-    needs: []  # TEMP_was_docs (restore: needs: docs)
+    needs: docs
     runs-on: [self-hosted]
     timeout-minutes: 15
     container:
@@ -331,7 +326,6 @@ jobs:
 
   stage-7-videomme:
     name: stage 7 - Video-MME accuracy + speed
-    if: false  # TEMP_SKIP_for_warmup_verify
     needs: docs
     runs-on: [self-hosted]
     timeout-minutes: 30
@@ -369,7 +363,6 @@ jobs:
 
   stage-8-videomme-talker:
     name: stage 8 - Video-MME Talker
-    if: false  # TEMP_SKIP_for_warmup_verify
     needs: docs
     runs-on: [self-hosted]
     timeout-minutes: 30
@@ -407,7 +400,6 @@ jobs:
 
   stage-9-videoamme:
     name: stage 9 - Video-AMME accuracy + speed
-    if: false  # TEMP_SKIP_for_warmup_verify
     needs: docs
     runs-on: [self-hosted]
     timeout-minutes: 30
@@ -445,7 +437,6 @@ jobs:
 
   stage-10-videoamme-talker:
     name: stage 10 - Video-AMME Talker
-    if: false  # TEMP_SKIP_for_warmup_verify
     needs: docs
     runs-on: [self-hosted]
     timeout-minutes: 30
