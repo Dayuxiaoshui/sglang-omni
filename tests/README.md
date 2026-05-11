@@ -15,9 +15,23 @@ tests/
 ├── test_model/
 └── unit_test/
     ├── fixtures/
+    │   ├── fish_fakes.py
+    │   ├── pipeline_fakes.py
+    │   └── qwen_fakes.py
     ├── pipeline/
+    │   ├── helpers.py
+    │   ├── test_compile.py
+    │   ├── test_coordinator.py
+    │   ├── test_scheduler.py
+    │   └── test_stage.py
     ├── qwen3_omni/
+    │   ├── test_code2wav.py
+    │   ├── test_pipeline.py
+    │   └── test_talker.py
     └── fishaudio_s2_pro/
+        ├── test_pipeline.py
+        ├── test_tts.py
+        └── test_vocoder.py
 ```
 
 ## Root Files
@@ -58,16 +72,23 @@ resources.
 
 ## `unit_test/`
 
+Fast contract tests that should run without model downloads or real server
+startup. Keep these focused on the smallest component that owns the behavior.
+
+Current ownership:
+
+- `unit_test/pipeline/`: model-agnostic V1 pipeline contracts, including config
+  compile/runtime wiring, coordinator behavior, stage routing, relay handling,
+  and scheduler batch/error semantics.
+- `unit_test/qwen3_omni/`: Qwen3-Omni pipeline state/request contracts, talker
+  contracts, and Code2Wav streaming/cleanup behavior.
+- `unit_test/fishaudio_s2_pro/`: FishAudio S2-Pro pipeline/tokenizer/TTS
+  contracts and vocoder batching/trim behavior.
+- `unit_test/fixtures/`: fake schedulers, payload factories, tokenizers, relays,
+  and model doubles shared by the focused unit tests.
 
 Expected command:
 
 ```bash
 pytest tests/unit_test -q
 ```
-
-Suggested ownership:
-
-- `unit_test/pipeline/`: model-agnostic V1 pipeline contracts.
-- `unit_test/qwen3_omni/`: Qwen3-Omni request/state/talker/audio contracts.
-- `unit_test/fishaudio_s2_pro/`: FishAudio S2-Pro tokenizer/TTS/vocoder contracts.
-- `unit_test/fixtures/`: small fake objects and payload factories.
