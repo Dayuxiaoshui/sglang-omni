@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import threading
+from types import SimpleNamespace
 
 from sglang_omni_v1.scheduling.messages import IncomingMessage
+from sglang_omni_v1.scheduling.omni_scheduler import OmniScheduler
 from sglang_omni_v1.scheduling.simple_scheduler import SimpleScheduler
 from sglang_omni_v1.scheduling.threaded_simple_scheduler import ThreadedSimpleScheduler
 from tests.unit_test.pipeline.helpers import run_scheduler
@@ -98,3 +100,24 @@ def test_threaded_simple_scheduler_reports_worker_errors() -> None:
     assert outputs[0].request_id == "req-err"
     assert outputs[0].type == "error"
     assert isinstance(outputs[0].data, RuntimeError)
+
+
+def test_omni_scheduler_default_stream_chunk_buffers_raw_chunks() -> None:
+    """Preserves generic stream chunk buffering when no custom handler exists."""
+    req_data = SimpleNamespace()
+    chunk = SimpleNamespace(data="chunk-data", metadata={"token_id": 1})
+
+    OmniScheduler._append_stream_chunk_default(req_data, chunk)
+
+    assert list(req_data.stream_chunks) == [chunk]
+
+
+def test_omni_scheduler_default_stream_done_sets_generic_flag() -> None:
+    """Preserves generic stream completion state when no custom handler exists."""
+    scheduler = object.__new__(OmniScheduler)
+    scheduler._stream_done_handler = None
+    req_data = SimpleNamespace()
+
+    scheduler._mark_stream_done(req_data)
+
+    assert req_data.stream_done is True
