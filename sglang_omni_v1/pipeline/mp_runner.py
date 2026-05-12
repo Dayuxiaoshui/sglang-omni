@@ -39,11 +39,6 @@ def _build_stage_groups(
     name_map: dict[str, str] | None = None,
     endpoints: dict[str, str] | None = None,
 ) -> list[StageGroup]:
-    """Compile *config* into one :class:`StageGroup` per logical stage.
-
-    This runs in the **main process** so that subprocesses never need to
-    re-compile the pipeline configuration.
-    """
     if ctx is None:
         ctx = multiprocessing.get_context("spawn")
 
