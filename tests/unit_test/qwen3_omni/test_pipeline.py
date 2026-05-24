@@ -18,6 +18,7 @@ from sglang_omni.cli.serve import (
 from sglang_omni.config import PipelineConfig, StageConfig, resolve_stage_factory_args
 from sglang_omni.models.qwen3_omni.config import (
     Qwen3OmniPipelineConfig,
+    Qwen3OmniSpeechColocatedPipelineConfig,
     Qwen3OmniSpeechPipelineConfig,
 )
 from sglang_omni.models.qwen3_omni.merge import decode_events, merge_for_thinker
@@ -57,6 +58,7 @@ def test_qwen_pipeline_config_and_state_contracts() -> None:
     """Preserves Qwen text/speech topology and PipelineState coercion behavior."""
     text_config = Qwen3OmniPipelineConfig(model_path="model")
     speech_config = Qwen3OmniSpeechPipelineConfig(model_path="model")
+    colocated_config = Qwen3OmniSpeechColocatedPipelineConfig(model_path="model")
 
     assert [stage.name for stage in text_config.stages] == [
         "preprocessing",
@@ -100,6 +102,9 @@ def test_qwen_pipeline_config_and_state_contracts() -> None:
     assert _stage(speech_config, "decode").can_accept_stream_before_payload
     assert _stage(speech_config, "talker_ar").can_accept_stream_before_payload
     assert _stage(speech_config, "code2wav").can_accept_stream_before_payload
+    assert text_config.env_defaults == {"SGLANG_JIT_DEEPGEMM_PRECOMPILE": "0"}
+    assert speech_config.env_defaults == {"SGLANG_JIT_DEEPGEMM_PRECOMPILE": "0"}
+    assert colocated_config.env_defaults == {"SGLANG_JIT_DEEPGEMM_PRECOMPILE": "0"}
 
     state = PipelineState.from_dict(
         {

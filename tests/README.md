@@ -36,12 +36,15 @@ tests/
     │   ├── test_code2wav.py
     │   ├── test_colocation_config.py
     │   ├── test_config_manager.py
+    │   ├── test_fp8_backend_config.py
     │   ├── test_example_launcher.py
     │   ├── test_logit_shaping.py
     │   ├── test_pipeline.py
+    │   ├── test_quantization.py
     │   ├── test_sglang_ar_budget.py
     │   ├── test_streaming.py
-    │   └── test_talker.py
+    │   ├── test_talker.py
+    │   └── test_text_template.py
     ├── ming_omni/
     │   ├── test_pipeline.py
     │   ├── test_talker.py
@@ -189,6 +192,8 @@ that happened to contain an older version of the test.
   - public CLI/config behavior
   - example launcher config contract (TP/GPU/mem-fraction overrides)
   - SGLang argument builders
+  - backend policy and quantization compatibility contracts
+  - tokenizer and preprocessing fallback behavior
   - memory flag contracts
   - colocation config and SGLang AR budget contracts
   - `PipelineState` request builders
