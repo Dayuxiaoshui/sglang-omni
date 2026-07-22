@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import importlib
 import importlib.metadata
-import importlib.util
 import os
 from collections.abc import Mapping
 from typing import Any
@@ -33,7 +32,7 @@ _BACKENDS = (
         "compressed-tensors",
         "compressed_tensors",
     ),
-    ("communication", "nixl", "nixl-cu13", "nixl"),
+    ("communication", "nixl", "nixl-cu13", "nixl_cu13"),
     (
         "communication",
         "mooncake",
@@ -62,25 +61,29 @@ def _package_version(distribution: str) -> str | None:
         return None
 
 
-def _module_available(module: str) -> bool:
+def _module_import_error(module: str) -> str | None:
     try:
-        return importlib.util.find_spec(module) is not None
-    except Exception:
-        return False
+        importlib.import_module(module)
+    except Exception as exc:
+        return f"{type(exc).__name__}: {exc}"
+    return None
 
 
 def _backend_inventory() -> list[dict[str, Any]]:
     backends = []
     for category, name, distribution, module in _BACKENDS:
         version = _package_version(distribution)
-        available = _module_available(module)
+        import_error = (
+            _module_import_error(module) if version is not None else None
+        )
+        importable = version is not None and import_error is None
         reason = None
         if version is None:
             reason = f"Distribution {distribution!r} is not installed."
-        elif not available:
+        elif import_error is not None:
             reason = (
                 f"Distribution {distribution!r} is installed, but module "
-                f"{module!r} is not importable."
+                f"{module!r} failed to import: {import_error}"
             )
         backends.append(
             {
@@ -90,7 +93,7 @@ def _backend_inventory() -> list[dict[str, Any]]:
                 "version": version,
                 "module": module,
                 "installed": version is not None,
-                "importable": available,
+                "importable": importable,
                 "reason": reason,
             }
         )
@@ -199,9 +202,23 @@ def _logical_devices(
         except Exception as exc:
             warnings.append(f"PyTorch GPU {logical_index} query failed: {exc}")
             properties = None
+        visible_device = (
+            visible_devices[logical_index]
+            if logical_index < len(visible_devices)
+            else logical_index
+        )
         physical = _physical_device(
             logical_index, properties, visible_devices, by_index, by_uuid
         )
+        if (
+            isinstance(visible_device, str)
+            and visible_device.upper().startswith("MIG-")
+            and not physical
+        ):
+            warnings.append(
+                f"CUDA_VISIBLE_DEVICES entry {visible_device!r} is a MIG device; "
+                "physical GPU mapping, free memory, and topology are unsupported."
+            )
         torch_cc = (
             f"{properties.major}.{properties.minor}"
             if properties is not None
@@ -210,11 +227,7 @@ def _logical_devices(
         devices.append(
             {
                 "logical_index": logical_index,
-                "visible_device": (
-                    visible_devices[logical_index]
-                    if logical_index < len(visible_devices)
-                    else logical_index
-                ),
+                "visible_device": visible_device,
                 "physical_index": physical.get("physical_index"),
                 "uuid": physical.get("uuid")
                 or str(getattr(properties, "uuid", "") or "") or None,

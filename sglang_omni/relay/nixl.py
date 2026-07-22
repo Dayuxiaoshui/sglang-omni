@@ -18,8 +18,8 @@ logger = logging.getLogger(__name__)
 # Dependency Check
 # ==========================================
 try:
-    from nixl._api import nixl_agent as NixlAgent
-    from nixl._api import nixl_agent_config
+    from nixl_cu13 import nixl_agent as NixlAgent
+    from nixl_cu13 import nixl_agent_config
 
     NIXL_AVAILABLE = True
 except ImportError as e:

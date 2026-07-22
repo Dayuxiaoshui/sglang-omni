@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import importlib
 import json
+import subprocess
+import sys
 from types import ModuleType, SimpleNamespace
 
 from typer.testing import CliRunner
@@ -144,23 +146,56 @@ def test_collect_gpu_diagnostics_preserves_reordered_visible_mapping(
     assert fake_nvml.shutdown_called is True
 
 
+def test_mig_visible_device_emits_unsupported_mapping_warning(monkeypatch) -> None:
+    fake_nvml = _FakeNVML()
+    fake_torch = _FakeTorch()
+    fake_torch.cuda.properties = [
+        SimpleNamespace(
+            name="MIG Device",
+            major=12,
+            minor=0,
+            total_memory=10 * 1024**3,
+            uuid="MIG-instance-uuid",
+        )
+    ]
+    monkeypatch.setattr(gpu_diagnostics, "_cuda_runtime_version", lambda: "13.3")
+    monkeypatch.setattr(gpu_diagnostics, "_backend_inventory", lambda: [])
+
+    report = gpu_diagnostics.collect_gpu_diagnostics(
+        env={"CUDA_VISIBLE_DEVICES": "MIG-instance-uuid"},
+        torch_module=fake_torch,
+        pynvml_module=fake_nvml,
+    )
+
+    assert report["gpus"][0]["physical_index"] is None
+    assert report["gpus"][0]["free_memory_bytes"] is None
+    assert any(
+        "MIG device" in warning and "unsupported" in warning
+        for warning in report["warnings"]
+    )
+
+
 def test_backend_inventory_reports_installed_but_unimportable(monkeypatch) -> None:
     monkeypatch.setattr(
         gpu_diagnostics,
         "_BACKENDS",
-        (("communication", "nixl", "nixl-cu13", "nixl"),),
+        (("communication", "nixl", "nixl-cu13", "nixl_cu13"),),
     )
     monkeypatch.setattr(gpu_diagnostics, "_package_version", lambda name: "1.3.1")
-    monkeypatch.setattr(gpu_diagnostics, "_module_available", lambda name: False)
+    monkeypatch.setattr(
+        gpu_diagnostics,
+        "_module_import_error",
+        lambda name: "OSError: libcudart.so: cannot open shared object file",
+    )
 
     backend = gpu_diagnostics._backend_inventory()[0]
 
     assert backend["installed"] is True
     assert backend["importable"] is False
-    assert "not importable" in backend["reason"]
+    assert "failed to import: OSError: libcudart.so" in backend["reason"]
 
 
-def test_check_gpu_json_does_not_load_a_model(monkeypatch) -> None:
+def test_check_gpu_json_output(monkeypatch) -> None:
     check_gpu_module = importlib.import_module("sglang_omni.cli.check_gpu")
     report = {
         "schema_version": 1,
@@ -177,3 +212,27 @@ def test_check_gpu_json_does_not_load_a_model(monkeypatch) -> None:
 
     assert result.exit_code == 0
     assert json.loads(result.stdout) == report
+
+
+def test_check_gpu_does_not_load_serving_entrypoints_in_subprocess() -> None:
+    script = """
+import importlib
+import sys
+from typer.testing import CliRunner
+from sglang_omni.cli import app
+
+check_gpu_module = importlib.import_module("sglang_omni.cli.check_gpu")
+check_gpu_module.collect_gpu_diagnostics = lambda: {"schema_version": 1}
+result = CliRunner().invoke(app, ["check-gpu", "--json"])
+assert result.exit_code == 0, result.output
+assert "sglang_omni.serve.launcher" not in sys.modules
+assert "sglang_omni.serve.openai_api" not in sys.modules
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", script],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr or result.stdout
