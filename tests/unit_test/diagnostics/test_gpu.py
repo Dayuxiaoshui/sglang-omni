@@ -41,9 +41,6 @@ class _FakeCuda:
     def get_device_properties(self, index: int):
         return self.properties[index]
 
-    def can_device_access_peer(self, source: int, target: int) -> bool:
-        return False
-
 
 class _FakeTorch:
     __version__ = "2.11.0+cu130"
@@ -54,10 +51,6 @@ class _FakeTorch:
 
 
 class _FakeNVML(ModuleType):
-    NVML_P2P_STATUS_OK = 0
-    NVML_P2P_CAPS_INDEX_READ = 0
-    NVML_TOPOLOGY_NODE = 40
-
     def __init__(self) -> None:
         super().__init__("pynvml")
         self.shutdown_called = False
@@ -101,16 +94,6 @@ class _FakeNVML(ModuleType):
     def nvmlSystemGetCudaDriverVersion_v2(self) -> int:
         return 13030
 
-    def nvmlDeviceGetP2PStatus(
-        self, source: str, target: str, index: int
-    ) -> int:
-        return 1
-
-    def nvmlDeviceGetTopologyCommonAncestor(
-        self, source: str, target: str
-    ) -> int:
-        return self.NVML_TOPOLOGY_NODE
-
 
 def test_collect_gpu_diagnostics_preserves_reordered_visible_mapping(
     monkeypatch,
@@ -133,16 +116,52 @@ def test_collect_gpu_diagnostics_preserves_reordered_visible_mapping(
         "GPU-uuid-b",
         "GPU-uuid-a",
     ]
-    assert report["selection"]["attention_backend"] is None
     assert report["environment"]["cuda_visible_devices"] == "1,0"
-    assert report["p2p"]["status"] == "unavailable"
-    assert report["p2p"]["matrix"] == [[None, False], [False, None]]
-    assert report["topology"]["matrix"] == [
-        ["self", "node"],
-        ["node", "self"],
-    ]
+    assert set(report) == {
+        "schema_version",
+        "environment",
+        "gpus",
+        "backends",
+        "warnings",
+    }
     rendered = gpu_diagnostics.render_gpu_diagnostics(report)
     assert "logical 0 -> physical 1" in rendered
+    assert "Selection:" not in rendered
+    assert "CUDA Graph/torch.compile:" not in rendered
+    assert "P2P:" not in rendered
+    assert "Topology:" not in rendered
+    assert fake_nvml.shutdown_called is True
+
+
+def test_nvml_inventory_failure_is_isolated_per_physical_device(
+    monkeypatch,
+) -> None:
+    class _PartiallyFailingNVML(_FakeNVML):
+        def nvmlDeviceGetCount(self) -> int:
+            return 3
+
+        def nvmlDeviceGetHandleByIndex(self, index: int) -> str:
+            if index == 1:
+                raise RuntimeError("device is temporarily unavailable")
+            return super().nvmlDeviceGetHandleByIndex(index)
+
+    fake_nvml = _PartiallyFailingNVML()
+    fake_torch = _FakeTorch()
+    monkeypatch.setattr(gpu_diagnostics, "_cuda_runtime_version", lambda: "13.3")
+    monkeypatch.setattr(gpu_diagnostics, "_backend_inventory", lambda: [])
+
+    report = gpu_diagnostics.collect_gpu_diagnostics(
+        env={"CUDA_VISIBLE_DEVICES": "0,2"},
+        torch_module=fake_torch,
+        pynvml_module=fake_nvml,
+    )
+
+    assert [gpu["physical_index"] for gpu in report["gpus"]] == [0, 2]
+    assert any(
+        "physical_index=1" in warning
+        and "device is temporarily unavailable" in warning
+        for warning in report["warnings"]
+    )
     assert fake_nvml.shutdown_called is True
 
 

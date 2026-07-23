@@ -21,7 +21,7 @@ def check_gpu(
         ),
     ] = False,
 ) -> None:
-    """Report GPU mapping, topology, P2P, and installed backends."""
+    """Report GPU mapping, runtime versions, and installed backends."""
 
     report = collect_gpu_diagnostics()
     if json_output:

@@ -18,14 +18,8 @@ logger = logging.getLogger(__name__)
 # Dependency Check
 # ==========================================
 try:
-    try:
-        from nixl_cu13 import nixl_agent as NixlAgent
-        from nixl_cu13 import nixl_agent_config
-    except ModuleNotFoundError as exc:
-        if exc.name != "nixl_cu13":
-            raise
-        from nixl._api import nixl_agent as NixlAgent
-        from nixl._api import nixl_agent_config
+    from nixl._api import nixl_agent as NixlAgent
+    from nixl._api import nixl_agent_config
 
     NIXL_AVAILABLE = True
 except ImportError as e:

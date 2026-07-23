@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Model-free GPU, topology, and backend diagnostics."""
+"""Model-free GPU and backend diagnostics."""
 
 from __future__ import annotations
 
@@ -40,7 +40,6 @@ _BACKENDS = (
         "mooncake",
     ),
 )
-_NO_MODEL_REASON = "No model or server configuration was loaded."
 
 
 def _cuda_version(value: int | None) -> str | None:
@@ -138,7 +137,12 @@ def _nvml_inventory(
 
     try:
         count = int(pynvml.nvmlDeviceGetCount())
-        for physical_index in range(count):
+    except Exception as exc:
+        warnings.append(f"NVML device count query failed: {exc}")
+        return inventory, system, warnings
+
+    for physical_index in range(count):
+        try:
             handle = pynvml.nvmlDeviceGetHandleByIndex(physical_index)
             memory = pynvml.nvmlDeviceGetMemoryInfo(handle)
             pci = pynvml.nvmlDeviceGetPciInfo(handle)
@@ -155,8 +159,11 @@ def _nvml_inventory(
                     "_handle": handle,
                 }
             )
-    except Exception as exc:
-        warnings.append(f"NVML device inventory failed: {exc}")
+        except Exception as exc:
+            warnings.append(
+                f"NVML device inventory failed for physical_index="
+                f"{physical_index}: {exc}"
+            )
     return inventory, system, warnings
 
 
@@ -217,7 +224,7 @@ def _logical_devices(
         ):
             warnings.append(
                 f"CUDA_VISIBLE_DEVICES entry {visible_device!r} is a MIG device; "
-                "physical GPU mapping, free memory, and topology are unsupported."
+                "physical GPU mapping and free memory are unsupported."
             )
         torch_cc = (
             f"{properties.major}.{properties.minor}"
@@ -243,83 +250,6 @@ def _logical_devices(
     return devices
 
 
-def _p2p_report(
-    torch: Any, device_count: int
-) -> tuple[list[list[bool | None]], str, str]:
-    matrix = [[None for _ in range(device_count)] for _ in range(device_count)]
-    if device_count < 2:
-        return matrix, "not_applicable", "Fewer than two visible GPUs."
-
-    try:
-        for source in range(device_count):
-            for target in range(device_count):
-                if source != target:
-                    matrix[source][target] = bool(
-                        torch.cuda.can_device_access_peer(source, target)
-                    )
-    except Exception as exc:
-        return matrix, "unknown", f"P2P query failed: {exc}"
-
-    pairs = [
-        matrix[source][target]
-        for source in range(device_count)
-        for target in range(device_count)
-        if source != target
-    ]
-    if all(pairs):
-        return matrix, "full", "All visible GPU pairs support direct peer access."
-    return (
-        matrix,
-        "unavailable",
-        "P2P is unavailable; keep custom all-reduce disabled and use "
-        "NCCL/host-staged transport.",
-    )
-
-
-def _topology_name(pynvml: Any, value: Any) -> str:
-    for name, constant in (
-        ("internal", "NVML_TOPOLOGY_INTERNAL"),
-        ("single", "NVML_TOPOLOGY_SINGLE"),
-        ("multiple", "NVML_TOPOLOGY_MULTIPLE"),
-        ("host_bridge", "NVML_TOPOLOGY_HOSTBRIDGE"),
-        ("node", "NVML_TOPOLOGY_NODE"),
-        ("system", "NVML_TOPOLOGY_SYSTEM"),
-    ):
-        if value == getattr(pynvml, constant, object()):
-            return name
-    return str(value)
-
-
-def _topology_matrix(
-    pynvml: Any | None,
-    devices: list[dict[str, Any]],
-    warnings: list[str],
-) -> list[list[str | None]]:
-    count = len(devices)
-    matrix = [["self" if i == j else None for j in range(count)] for i in range(count)]
-    if pynvml is None or any(device["_handle"] is None for device in devices):
-        return matrix
-
-    get_ancestor = getattr(pynvml, "nvmlDeviceGetTopologyCommonAncestor", None)
-    if get_ancestor is None:
-        return matrix
-    for source in range(count):
-        for target in range(count):
-            if source == target:
-                continue
-            try:
-                value = get_ancestor(
-                    devices[source]["_handle"], devices[target]["_handle"]
-                )
-                matrix[source][target] = _topology_name(pynvml, value)
-            except Exception as exc:
-                warnings.append(
-                    f"NVML topology query failed for logical GPUs "
-                    f"{source}->{target}: {exc}"
-                )
-    return matrix
-
-
 def collect_gpu_diagnostics(
     *,
     env: Mapping[str, str] | None = None,
@@ -337,8 +267,6 @@ def collect_gpu_diagnostics(
     inventory, system, warnings = _nvml_inventory(pynvml)
     try:
         devices = _logical_devices(torch, visible_devices, inventory, warnings)
-        p2p_matrix, p2p_status, p2p_reason = _p2p_report(torch, len(devices))
-        topology = _topology_matrix(pynvml, devices, warnings)
     finally:
         if pynvml is not None:
             _shutdown_nvml(pynvml)
@@ -366,22 +294,7 @@ def collect_gpu_diagnostics(
             "logical_device_count": len(devices),
         },
         "gpus": devices,
-        "topology": {"matrix": topology},
-        "p2p": {
-            "status": p2p_status,
-            "matrix": p2p_matrix,
-            "fallback_reason": p2p_reason,
-        },
         "backends": backends,
-        "selection": {
-            "attention_backend": None,
-            "gemm_backend": None,
-            "moe_backend": None,
-            "quantization_backend": None,
-            "cuda_graph": None,
-            "torch_compile": None,
-            "reason": _NO_MODEL_REASON,
-        },
         "warnings": warnings,
     }
 
@@ -421,17 +334,7 @@ def render_gpu_diagnostics(report: Mapping[str, Any]) -> str:
             f"pci={device['pci_bus_id'] or 'unknown'}"
         )
 
-    lines.extend(
-        [
-            f"Topology: {report['topology']['matrix'] or 'unavailable'}",
-            (
-                f"P2P: {report['p2p']['status']} "
-                f"matrix={report['p2p']['matrix'] or 'unavailable'}"
-            ),
-            f"  Fallback: {report['p2p']['fallback_reason']}",
-            "Backends:",
-        ]
-    )
+    lines.append("Backends:")
     for backend in report["backends"]:
         status = (
             "available"
@@ -445,12 +348,6 @@ def render_gpu_diagnostics(report: Mapping[str, Any]) -> str:
             f"version={backend['version'] or '-'}"
         )
 
-    lines.extend(
-        [
-            f"Selection: not evaluated; {report['selection']['reason']}",
-            "CUDA Graph/torch.compile: not evaluated",
-        ]
-    )
     if report["warnings"]:
         lines.append("Warnings:")
         lines.extend(f"  {warning}" for warning in report["warnings"])
