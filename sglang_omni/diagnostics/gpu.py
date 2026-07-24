@@ -6,6 +6,8 @@ from __future__ import annotations
 import importlib
 import importlib.metadata
 import os
+import subprocess
+import sys
 from collections.abc import Mapping
 from typing import Any
 
@@ -18,28 +20,24 @@ from sglang_omni.utils.gpu_memory import (
 )
 
 _BACKENDS = (
-    ("attention", "flash-attn-4", "flash-attn-4", "flash_attn.cute"),
-    ("attention", "flashinfer", "flashinfer-python", "flashinfer"),
-    ("attention", "triton", "triton", "triton"),
-    ("attention", "torch-sdpa", "torch", "torch.nn.functional"),
-    ("gemm", "sgl-deep-gemm", "sgl-deep-gemm", "deep_gemm"),
-    ("gemm", "sglang-kernel", "sglang-kernel", "sgl_kernel"),
-    ("moe", "quack-kernels", "quack-kernels", "quack"),
-    ("quantization", "torchao", "torchao", "torchao"),
+    ("attention", "flash-attn-4", "flash_attn.cute"),
+    ("attention", "flashinfer", "flashinfer"),
+    ("attention", "triton", "triton"),
+    ("attention", "torch-sdpa", "torch.nn.functional"),
+    ("gemm", "sgl-deep-gemm", "deep_gemm"),
+    ("gemm", "sglang-kernel", "sgl_kernel"),
+    ("moe", "quack-kernels", "quack"),
+    ("quantization", "torchao", "torchao"),
     (
         "quantization",
         "compressed-tensors",
-        "compressed-tensors",
         "compressed_tensors",
     ),
-    ("communication", "nixl", "nixl-cu13", "nixl_cu13"),
-    (
-        "communication",
-        "mooncake",
-        "mooncake-transfer-engine-cuda13",
-        "mooncake",
-    ),
+    ("communication", "nixl", "nixl._api"),
+    ("communication", "mooncake", "mooncake.engine"),
 )
+_IMPORT_PROBE_TIMEOUT_SECONDS = 30.0
+_IMPORT_PROBE_CODE = "import importlib, sys; importlib.import_module(sys.argv[1])"
 
 
 def _cuda_version(value: int | None) -> str | None:
@@ -53,37 +51,78 @@ def _normalize_uuid(value: Any) -> str | None:
     return normalized.removeprefix("gpu-") or None
 
 
-def _package_version(distribution: str) -> str | None:
-    try:
-        return importlib.metadata.version(distribution)
-    except importlib.metadata.PackageNotFoundError:
-        return None
+def _probe_output(*values: str | bytes | None) -> str | None:
+    for value in values:
+        if value:
+            text = (
+                value.decode("utf-8", errors="replace")
+                if isinstance(value, bytes)
+                else value
+            ).strip()
+            if text:
+                return text[-2000:]
+    return None
 
 
 def _module_import_error(module: str) -> str | None:
     try:
-        importlib.import_module(module)
-    except Exception as exc:
-        return f"{type(exc).__name__}: {exc}"
-    return None
+        result = subprocess.run(
+            [sys.executable, "-c", _IMPORT_PROBE_CODE, module],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=_IMPORT_PROBE_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        detail = _probe_output(exc.stderr, exc.stdout)
+        reason = f"timed out after {_IMPORT_PROBE_TIMEOUT_SECONDS:g}s"
+        return f"{reason}: {detail}" if detail else reason
+
+    if result.returncode == 0:
+        return None
+
+    reason = (
+        f"terminated by signal {-result.returncode}"
+        if result.returncode < 0
+        else f"exited with code {result.returncode}"
+    )
+    detail = _probe_output(result.stderr, result.stdout)
+    return f"{reason}: {detail}" if detail else reason
+
+
+def _distribution_info(module: str) -> tuple[str | None, str | None]:
+    package = module.partition(".")[0]
+    try:
+        distributions = importlib.metadata.packages_distributions().get(package, ())
+    except Exception:
+        return None, None
+
+    for distribution in sorted(distributions):
+        try:
+            return distribution, importlib.metadata.version(distribution)
+        except importlib.metadata.PackageNotFoundError:
+            continue
+        except Exception:
+            return distribution, None
+    return None, None
 
 
 def _backend_inventory() -> list[dict[str, Any]]:
     backends = []
-    for category, name, distribution, module in _BACKENDS:
-        version = _package_version(distribution)
-        import_error = (
-            _module_import_error(module) if version is not None else None
-        )
-        importable = version is not None and import_error is None
+    for category, name, module in _BACKENDS:
+        import_error = _module_import_error(module)
+        distribution, version = _distribution_info(module)
+        importable = import_error is None
+        installed = distribution is not None or importable
         reason = None
-        if version is None:
-            reason = f"Distribution {distribution!r} is not installed."
-        elif import_error is not None:
-            reason = (
-                f"Distribution {distribution!r} is installed, but module "
-                f"{module!r} failed to import: {import_error}"
-            )
+        if import_error is not None:
+            if distribution is not None:
+                reason = (
+                    f"Distribution {distribution!r} is installed, but module "
+                    f"{module!r} failed to import: {import_error}"
+                )
+            else:
+                reason = f"Module {module!r} failed to import: {import_error}"
         backends.append(
             {
                 "category": category,
@@ -91,7 +130,7 @@ def _backend_inventory() -> list[dict[str, Any]]:
                 "distribution": distribution,
                 "version": version,
                 "module": module,
-                "installed": version is not None,
+                "installed": installed,
                 "importable": importable,
                 "reason": reason,
             }
@@ -144,26 +183,59 @@ def _nvml_inventory(
     for physical_index in range(count):
         try:
             handle = pynvml.nvmlDeviceGetHandleByIndex(physical_index)
-            memory = pynvml.nvmlDeviceGetMemoryInfo(handle)
-            pci = pynvml.nvmlDeviceGetPciInfo(handle)
-            major, minor = pynvml.nvmlDeviceGetCudaComputeCapability(handle)
-            inventory.append(
-                {
-                    "physical_index": physical_index,
-                    "uuid": _decode_nvml_string(pynvml.nvmlDeviceGetUUID(handle)),
-                    "pci_bus_id": _decode_nvml_string(pci.busId),
-                    "name": _decode_nvml_string(pynvml.nvmlDeviceGetName(handle)),
-                    "compute_capability": f"{int(major)}.{int(minor)}",
-                    "total_memory_bytes": int(memory.total),
-                    "free_memory_bytes": int(memory.free),
-                    "_handle": handle,
-                }
-            )
         except Exception as exc:
             warnings.append(
-                f"NVML device inventory failed for physical_index="
+                f"NVML device handle query failed for physical_index="
                 f"{physical_index}: {exc}"
             )
+            continue
+
+        device = {
+            "physical_index": physical_index,
+            "uuid": None,
+            "pci_bus_id": None,
+            "name": None,
+            "compute_capability": None,
+            "total_memory_bytes": None,
+            "free_memory_bytes": None,
+        }
+        try:
+            memory = pynvml.nvmlDeviceGetMemoryInfo(handle)
+            device["total_memory_bytes"] = int(memory.total)
+            device["free_memory_bytes"] = int(memory.free)
+        except Exception as exc:
+            warnings.append(
+                f"NVML memory query failed for physical_index="
+                f"{physical_index}: {exc}"
+            )
+        try:
+            pci = pynvml.nvmlDeviceGetPciInfo(handle)
+            device["pci_bus_id"] = _decode_nvml_string(pci.busId)
+        except Exception as exc:
+            warnings.append(
+                f"NVML PCI query failed for physical_index={physical_index}: {exc}"
+            )
+        try:
+            major, minor = pynvml.nvmlDeviceGetCudaComputeCapability(handle)
+            device["compute_capability"] = f"{int(major)}.{int(minor)}"
+        except Exception as exc:
+            warnings.append(
+                f"NVML compute capability query failed for physical_index="
+                f"{physical_index}: {exc}"
+            )
+        try:
+            device["uuid"] = _decode_nvml_string(pynvml.nvmlDeviceGetUUID(handle))
+        except Exception as exc:
+            warnings.append(
+                f"NVML UUID query failed for physical_index={physical_index}: {exc}"
+            )
+        try:
+            device["name"] = _decode_nvml_string(pynvml.nvmlDeviceGetName(handle))
+        except Exception as exc:
+            warnings.append(
+                f"NVML name query failed for physical_index={physical_index}: {exc}"
+            )
+        inventory.append(device)
     return inventory, system, warnings
 
 
@@ -227,9 +299,7 @@ def _logical_devices(
                 "physical GPU mapping and free memory are unsupported."
             )
         torch_cc = (
-            f"{properties.major}.{properties.minor}"
-            if properties is not None
-            else None
+            f"{properties.major}.{properties.minor}" if properties is not None else None
         )
         devices.append(
             {
@@ -237,14 +307,14 @@ def _logical_devices(
                 "visible_device": visible_device,
                 "physical_index": physical.get("physical_index"),
                 "uuid": physical.get("uuid")
-                or str(getattr(properties, "uuid", "") or "") or None,
+                or str(getattr(properties, "uuid", "") or "")
+                or None,
                 "pci_bus_id": physical.get("pci_bus_id"),
                 "name": physical.get("name") or getattr(properties, "name", None),
                 "compute_capability": physical.get("compute_capability") or torch_cc,
                 "total_memory_bytes": physical.get("total_memory_bytes")
                 or getattr(properties, "total_memory", None),
                 "free_memory_bytes": physical.get("free_memory_bytes"),
-                "_handle": physical.get("_handle"),
             }
         )
     return devices
@@ -270,9 +340,6 @@ def collect_gpu_diagnostics(
     finally:
         if pynvml is not None:
             _shutdown_nvml(pynvml)
-
-    for device in devices:
-        device.pop("_handle", None)
 
     backends = _backend_inventory()
     warnings.extend(
@@ -339,9 +406,11 @@ def render_gpu_diagnostics(report: Mapping[str, Any]) -> str:
         status = (
             "available"
             if backend["importable"]
-            else "installed, module unavailable"
-            if backend["installed"]
-            else "not installed"
+            else (
+                "installed, module unavailable"
+                if backend["installed"]
+                else "not installed"
+            )
         )
         lines.append(
             f"  {backend['category']}/{backend['name']}: {status}; "

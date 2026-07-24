@@ -75,9 +75,7 @@ class _FakeNVML(ModuleType):
         index = int(handle.split(":")[1])
         return SimpleNamespace(busId=f"00000000:{index + 1:02x}:00.0")
 
-    def nvmlDeviceGetCudaComputeCapability(
-        self, handle: str
-    ) -> tuple[int, int]:
+    def nvmlDeviceGetCudaComputeCapability(self, handle: str) -> tuple[int, int]:
         return (12, 0)
 
     def nvmlDeviceGetUUID(self, handle: str) -> str:
@@ -126,10 +124,6 @@ def test_collect_gpu_diagnostics_preserves_reordered_visible_mapping(
     }
     rendered = gpu_diagnostics.render_gpu_diagnostics(report)
     assert "logical 0 -> physical 1" in rendered
-    assert "Selection:" not in rendered
-    assert "CUDA Graph/torch.compile:" not in rendered
-    assert "P2P:" not in rendered
-    assert "Topology:" not in rendered
     assert fake_nvml.shutdown_called is True
 
 
@@ -158,8 +152,37 @@ def test_nvml_inventory_failure_is_isolated_per_physical_device(
 
     assert [gpu["physical_index"] for gpu in report["gpus"]] == [0, 2]
     assert any(
-        "physical_index=1" in warning
-        and "device is temporarily unavailable" in warning
+        "physical_index=1" in warning and "device is temporarily unavailable" in warning
+        for warning in report["warnings"]
+    )
+    assert fake_nvml.shutdown_called is True
+
+
+def test_nvml_inventory_failure_is_isolated_per_device_field(monkeypatch) -> None:
+    class _PartiallyFailingNVML(_FakeNVML):
+        def nvmlDeviceGetPciInfo(self, handle: str) -> SimpleNamespace:
+            if handle == "handle:0":
+                raise RuntimeError("PCI information is unavailable")
+            return super().nvmlDeviceGetPciInfo(handle)
+
+    fake_nvml = _PartiallyFailingNVML()
+    fake_torch = _FakeTorch()
+    monkeypatch.setattr(gpu_diagnostics, "_cuda_runtime_version", lambda: "13.3")
+    monkeypatch.setattr(gpu_diagnostics, "_backend_inventory", lambda: [])
+
+    report = gpu_diagnostics.collect_gpu_diagnostics(
+        env={"CUDA_VISIBLE_DEVICES": "0,1"},
+        torch_module=fake_torch,
+        pynvml_module=fake_nvml,
+    )
+
+    assert [gpu["physical_index"] for gpu in report["gpus"]] == [0, 1]
+    assert report["gpus"][0]["pci_bus_id"] is None
+    assert report["gpus"][0]["free_memory_bytes"] == 30 * 1024**3
+    assert report["gpus"][0]["uuid"] == "GPU-uuid-a"
+    assert any(
+        "PCI query failed for physical_index=0" in warning
+        and "PCI information is unavailable" in warning
         for warning in report["warnings"]
     )
     assert fake_nvml.shutdown_called is True
@@ -198,20 +221,86 @@ def test_backend_inventory_reports_installed_but_unimportable(monkeypatch) -> No
     monkeypatch.setattr(
         gpu_diagnostics,
         "_BACKENDS",
-        (("communication", "nixl", "nixl-cu13", "nixl_cu13"),),
+        (("communication", "nixl", "nixl._api"),),
     )
-    monkeypatch.setattr(gpu_diagnostics, "_package_version", lambda name: "1.3.1")
+    monkeypatch.setattr(
+        gpu_diagnostics,
+        "_distribution_info",
+        lambda module: ("nixl", "1.3.1"),
+    )
     monkeypatch.setattr(
         gpu_diagnostics,
         "_module_import_error",
-        lambda name: "OSError: libcudart.so: cannot open shared object file",
+        lambda module: "exited with code 1: OSError: libcudart.so",
     )
 
     backend = gpu_diagnostics._backend_inventory()[0]
 
     assert backend["installed"] is True
     assert backend["importable"] is False
-    assert "failed to import: OSError: libcudart.so" in backend["reason"]
+    assert backend["distribution"] == "nixl"
+    assert "failed to import: exited with code 1" in backend["reason"]
+
+
+def test_backend_inventory_resolves_cuda_variant_distributions(monkeypatch) -> None:
+    monkeypatch.setattr(
+        gpu_diagnostics,
+        "_BACKENDS",
+        (
+            ("communication", "nixl", "nixl._api"),
+            ("communication", "mooncake", "mooncake.engine"),
+        ),
+    )
+    monkeypatch.setattr(gpu_diagnostics, "_module_import_error", lambda module: None)
+    monkeypatch.setattr(
+        gpu_diagnostics.importlib.metadata,
+        "packages_distributions",
+        lambda: {
+            "nixl": ["nixl"],
+            "mooncake": ["mooncake-transfer-engine"],
+        },
+    )
+    versions = {
+        "nixl": "1.2.0",
+        "mooncake-transfer-engine": "0.3.10",
+    }
+    monkeypatch.setattr(
+        gpu_diagnostics.importlib.metadata,
+        "version",
+        lambda distribution: versions[distribution],
+    )
+
+    backends = gpu_diagnostics._backend_inventory()
+
+    assert [(backend["distribution"], backend["version"]) for backend in backends] == [
+        ("nixl", "1.2.0"),
+        ("mooncake-transfer-engine", "0.3.10"),
+    ]
+    assert all(backend["installed"] for backend in backends)
+    assert all(backend["importable"] for backend in backends)
+
+
+def test_module_import_probe_survives_hard_crash(tmp_path, monkeypatch) -> None:
+    assert gpu_diagnostics._module_import_error("json") is None
+
+    module = tmp_path / "crashing_backend.py"
+    module.write_text(
+        "import os\nimport signal\nos.kill(os.getpid(), signal.SIGKILL)\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("PYTHONPATH", str(tmp_path))
+
+    error = gpu_diagnostics._module_import_error("crashing_backend")
+
+    assert error is not None
+    assert "terminated by signal" in error
+
+
+def test_module_import_probe_reports_import_error() -> None:
+    error = gpu_diagnostics._module_import_error("_missing_sglang_omni_backend")
+
+    assert error is not None
+    assert "ModuleNotFoundError" in error
 
 
 def test_check_gpu_json_output(monkeypatch) -> None:
@@ -230,6 +319,54 @@ def test_check_gpu_json_output(monkeypatch) -> None:
     result = CliRunner().invoke(app, ["check-gpu", "--json"])
 
     assert result.exit_code == 0
+    assert json.loads(result.stdout) == report
+
+
+def test_check_gpu_strict_fails_on_warning(monkeypatch) -> None:
+    check_gpu_module = importlib.import_module("sglang_omni.cli.check_gpu")
+    report = {
+        "schema_version": 1,
+        "environment": {
+            "cuda_available": True,
+            "logical_device_count": 1,
+        },
+        "gpus": [{"logical_index": 0}],
+        "backends": [],
+        "warnings": ["Installed backend failed to import."],
+    }
+    monkeypatch.setattr(
+        check_gpu_module,
+        "collect_gpu_diagnostics",
+        lambda: report,
+    )
+
+    result = CliRunner().invoke(app, ["check-gpu", "--json", "--strict"])
+
+    assert result.exit_code == 1
+    assert json.loads(result.stdout) == report
+
+
+def test_check_gpu_strict_fails_without_visible_cuda_device(monkeypatch) -> None:
+    check_gpu_module = importlib.import_module("sglang_omni.cli.check_gpu")
+    report = {
+        "schema_version": 1,
+        "environment": {
+            "cuda_available": False,
+            "logical_device_count": 0,
+        },
+        "gpus": [],
+        "backends": [],
+        "warnings": [],
+    }
+    monkeypatch.setattr(
+        check_gpu_module,
+        "collect_gpu_diagnostics",
+        lambda: report,
+    )
+
+    result = CliRunner().invoke(app, ["check-gpu", "--json", "--strict"])
+
+    assert result.exit_code == 1
     assert json.loads(result.stdout) == report
 
 
