@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from types import SimpleNamespace
 
 import pytest
@@ -15,6 +16,10 @@ from sglang_omni.models.fun_asr.sglang_model import (
     FunAsrNanoForConditionalGeneration,
     FunAsrNanoFSMN,
     MultiHeadedAttentionSANM,
+    _SHARED_QKV_BIAS,
+    _SHARED_QKV_WEIGHT,
+    _enable_shared_qkv,
+    _fused_qkv_project,
     _sanm_mask_from_lengths,
 )
 from sglang_omni.models.fun_asr.tool_funcs.audio_lengths import (
@@ -204,6 +209,252 @@ def test_sanm_fused_qkv_matches_separate_projections() -> None:
     # Fused path must still produce a usable attention output.
     assert out.shape == x.shape
     assert q_ref.shape == k_ref.shape == v_ref.shape
+
+
+def test_shared_qkv_preserves_checkpoint_names_and_storage() -> None:
+    torch.manual_seed(6)
+    attn = MultiHeadedAttentionSANM(n_head=2, in_feat=8, n_feat=8, dropout_rate=0.0)
+    qkv_parameter_names = {
+        "q_proj.weight",
+        "k_proj.weight",
+        "v_proj.weight",
+        "q_proj.bias",
+        "k_proj.bias",
+        "v_proj.bias",
+    }
+    original = {
+        name: parameter.detach().clone()
+        for name, parameter in attn.named_parameters()
+        if name in qkv_parameter_names
+    }
+
+    assert _enable_shared_qkv(attn) == 1
+    assert qkv_parameter_names <= set(dict(attn.named_parameters()))
+    state_keys = set(attn.state_dict())
+    assert _SHARED_QKV_WEIGHT not in state_keys
+    assert _SHARED_QKV_BIAS not in state_keys
+
+    packed_weight = getattr(attn.q_proj, _SHARED_QKV_WEIGHT)
+    packed_bias = getattr(attn.q_proj, _SHARED_QKV_BIAS)
+    assert packed_weight.data_ptr() == attn.q_proj.weight.data_ptr()
+    projection_bytes = (
+        attn.q_proj.out_features
+        * attn.q_proj.in_features
+        * packed_weight.element_size()
+    )
+    assert packed_weight.data_ptr() + projection_bytes == attn.k_proj.weight.data_ptr()
+    assert (
+        packed_weight.data_ptr() + 2 * projection_bytes == attn.v_proj.weight.data_ptr()
+    )
+    assert torch.equal(attn.q_proj.weight, original["q_proj.weight"])
+    assert torch.equal(attn.k_proj.weight, original["k_proj.weight"])
+    assert torch.equal(attn.v_proj.weight, original["v_proj.weight"])
+    assert packed_bias.data_ptr() == attn.q_proj.bias.data_ptr()
+
+
+def test_shared_qkv_inference_projection_and_weight_updates() -> None:
+    torch.manual_seed(7)
+    attn = MultiHeadedAttentionSANM(n_head=2, in_feat=8, n_feat=8, dropout_rate=0.0)
+    x = torch.randn(2, 5, 8)
+    with torch.no_grad():
+        expected = tuple(
+            projection(x) for projection in (attn.q_proj, attn.k_proj, attn.v_proj)
+        )
+        _enable_shared_qkv(attn)
+        actual = _fused_qkv_project(x, attn.q_proj, attn.k_proj, attn.v_proj)
+        assert all(
+            torch.equal(left, right)
+            for left, right in zip(actual, expected, strict=True)
+        )
+
+        packed_weight = getattr(attn.q_proj, _SHARED_QKV_WEIGHT)
+        packed_bias = getattr(attn.q_proj, _SHARED_QKV_BIAS)
+        packed_ptr = packed_weight.data_ptr()
+        attn.q_proj.weight.copy_(torch.full_like(attn.q_proj.weight, 3.0))
+        attn.k_proj.bias.copy_(torch.full_like(attn.k_proj.bias, 4.0))
+
+    assert packed_weight.data_ptr() == packed_ptr
+    assert torch.equal(packed_weight[: attn.q_proj.out_features], attn.q_proj.weight)
+    assert torch.equal(
+        packed_bias[attn.q_proj.out_features : 2 * attn.q_proj.out_features],
+        attn.k_proj.bias,
+    )
+
+
+def test_shared_qkv_project_load_weights_updates_packed_storage() -> None:
+    model = FunAsrNanoForConditionalGeneration.__new__(
+        FunAsrNanoForConditionalGeneration
+    )
+    nn.Module.__init__(model)
+    model.config = SimpleNamespace(
+        text_config=SimpleNamespace(tie_word_embeddings=False)
+    )
+    model.audio_tower = nn.Module()
+    model.audio_tower.attention = MultiHeadedAttentionSANM(
+        n_head=2, in_feat=8, n_feat=8, dropout_rate=0.0
+    )
+    _enable_shared_qkv(model.audio_tower)
+    model.multi_modal_projector = nn.Module()
+
+    replacement = torch.full_like(model.audio_tower.attention.q_proj.weight, 5.0)
+    model.load_weights(
+        [
+            (
+                "model.audio_tower.attention.q_proj.weight",
+                replacement,
+            )
+        ]
+    )
+
+    packed_weight = getattr(model.audio_tower.attention.q_proj, _SHARED_QKV_WEIGHT)
+    assert torch.equal(
+        packed_weight[: model.audio_tower.attention.q_proj.out_features], replacement
+    )
+
+
+def test_shared_qkv_load_state_dict_assign_rebuilds_aliases() -> None:
+    attn = MultiHeadedAttentionSANM(n_head=2, in_feat=8, n_feat=8, dropout_rate=0.0)
+    _enable_shared_qkv(attn)
+    state_dict = {
+        name: tensor.detach().clone() for name, tensor in attn.state_dict().items()
+    }
+    state_dict["q_proj.weight"].fill_(6.0)
+
+    attn.load_state_dict(state_dict, assign=True)
+
+    packed_weight = getattr(attn.q_proj, _SHARED_QKV_WEIGHT)
+    assert packed_weight.data_ptr() == attn.q_proj.weight.data_ptr()
+    assert torch.equal(
+        packed_weight[: attn.q_proj.out_features], state_dict["q_proj.weight"]
+    )
+    x = torch.randn(2, 5, 8)
+    with torch.no_grad():
+        actual = _fused_qkv_project(x, attn.q_proj, attn.k_proj, attn.v_proj)
+        expected = tuple(
+            projection(x) for projection in (attn.q_proj, attn.k_proj, attn.v_proj)
+        )
+    assert all(
+        torch.equal(left, right) for left, right in zip(actual, expected, strict=True)
+    )
+
+
+def test_shared_qkv_deepcopy_rebuilds_aliases() -> None:
+    attn = MultiHeadedAttentionSANM(n_head=2, in_feat=8, n_feat=8, dropout_rate=0.0)
+    _enable_shared_qkv(attn)
+
+    cloned = copy.deepcopy(attn)
+
+    packed_weight = getattr(cloned.q_proj, _SHARED_QKV_WEIGHT)
+    assert packed_weight.data_ptr() == cloned.q_proj.weight.data_ptr()
+    with torch.no_grad():
+        cloned.k_proj.weight.fill_(7.0)
+    start = cloned.q_proj.out_features
+    assert torch.equal(
+        packed_weight[start : start + cloned.k_proj.out_features],
+        cloned.k_proj.weight,
+    )
+
+
+def test_shared_qkv_keeps_grad_enabled_path() -> None:
+    torch.manual_seed(8)
+    attn = MultiHeadedAttentionSANM(n_head=2, in_feat=8, n_feat=8, dropout_rate=0.0)
+    _enable_shared_qkv(attn)
+    x = torch.randn(2, 5, 8, requires_grad=True)
+
+    q, k, v = _fused_qkv_project(x, attn.q_proj, attn.k_proj, attn.v_proj)
+    (q.square().mean() + k.square().mean() + v.square().mean()).backward()
+
+    assert attn.q_proj.weight.grad is not None
+    assert attn.k_proj.weight.grad is not None
+    assert attn.v_proj.weight.grad is not None
+    assert all(
+        torch.count_nonzero(parameter.grad).item() > 0
+        for parameter in (
+            attn.q_proj.weight,
+            attn.k_proj.weight,
+            attn.v_proj.weight,
+        )
+    )
+
+
+def test_shared_qkv_rebuilds_aliases_after_dtype_conversion() -> None:
+    attn = MultiHeadedAttentionSANM(n_head=2, in_feat=8, n_feat=8, dropout_rate=0.0)
+    _enable_shared_qkv(attn)
+    with torch.inference_mode():
+        attn.to(dtype=torch.float64)
+
+    packed_weight = getattr(attn.q_proj, _SHARED_QKV_WEIGHT)
+    assert packed_weight.dtype == torch.float64
+    assert not torch.is_inference(packed_weight)
+    assert not torch.is_inference(attn.q_proj.weight)
+    assert packed_weight.data_ptr() == attn.q_proj.weight.data_ptr()
+    projection_bytes = (
+        attn.q_proj.out_features
+        * attn.q_proj.in_features
+        * packed_weight.element_size()
+    )
+    assert packed_weight.data_ptr() + projection_bytes == attn.k_proj.weight.data_ptr()
+
+    x = torch.randn(2, 5, 8, dtype=torch.float64, requires_grad=True)
+    q, k, v = _fused_qkv_project(x, attn.q_proj, attn.k_proj, attn.v_proj)
+    (q.square().mean() + k.square().mean() + v.square().mean()).backward()
+    assert attn.q_proj.weight.grad is not None
+    assert attn.k_proj.weight.grad is not None
+    assert attn.v_proj.weight.grad is not None
+
+
+def test_fun_asr_shared_qkv_config_gate(monkeypatch) -> None:
+    import sglang_omni.models.fun_asr.sglang_model as fun_asr_model
+
+    class _FakeAudioTower(nn.Module):
+        def __init__(self, **kwargs) -> None:
+            super().__init__()
+            self.attention = MultiHeadedAttentionSANM(2, 8, 8, 0.0)
+
+    class _FakeProjector(nn.Module):
+        def __init__(self, **kwargs) -> None:
+            super().__init__()
+            self.attention = fun_asr_model.MultiHeadedAttention(2, 8, 0.0)
+
+    class _FakeLanguageModel(nn.Module):
+        def __init__(self, *args, **kwargs) -> None:
+            super().__init__()
+
+    monkeypatch.setattr(fun_asr_model, "FunAsrNanoAudioEncoder", _FakeAudioTower)
+    monkeypatch.setattr(fun_asr_model, "FunAsrNanoAdaptor", _FakeProjector)
+    monkeypatch.setattr(fun_asr_model, "Qwen3ForCausalLM", _FakeLanguageModel)
+
+    config = SimpleNamespace(
+        encoder_config=SimpleNamespace(
+            input_size=8,
+            d_model=8,
+            encoder_attention_heads=2,
+            encoder_ffn_dim=16,
+            encoder_layers=1,
+            num_timestamp_prediction_blocks=0,
+            kernel_size=3,
+            dropout=0.0,
+            attention_dropout=0.0,
+            activation_dropout=0.0,
+            activation_function="relu",
+        ),
+        text_config=SimpleNamespace(hidden_size=8),
+        adaptor_intermediate_size=16,
+        adaptor_num_hidden_layers=1,
+        adaptor_num_attention_heads=2,
+        activation_function="relu",
+    )
+
+    disabled = FunAsrNanoForConditionalGeneration(config)
+    assert not hasattr(disabled.audio_tower.attention.q_proj, _SHARED_QKV_WEIGHT)
+    assert not hasattr(
+        disabled.multi_modal_projector.attention.q_proj, _SHARED_QKV_WEIGHT
+    )
+
+    config.enable_fun_asr_shared_qkv = True
+    enabled = FunAsrNanoForConditionalGeneration(config)
+    assert hasattr(enabled.audio_tower.attention.q_proj, _SHARED_QKV_WEIGHT)
+    assert hasattr(enabled.multi_modal_projector.attention.q_proj, _SHARED_QKV_WEIGHT)
 
 
 def test_encoder_layer_runs_attention_once() -> None:
