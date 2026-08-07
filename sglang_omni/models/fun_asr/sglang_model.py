@@ -52,78 +52,6 @@ def _additive_key_pad_mask(mask: torch.Tensor, dtype: torch.dtype) -> torch.Tens
     ).masked_fill(mask.unsqueeze(1).eq(0), torch.finfo(dtype).min)
 
 
-_SHARED_QKV_WEIGHT = "_fun_asr_shared_qkv_weight"
-_SHARED_QKV_BIAS = "_fun_asr_shared_qkv_bias"
-_SHARED_QKV_LOAD_HOOK_REGISTERED = "_fun_asr_shared_qkv_load_hook_registered"
-
-
-def _repack_shared_qkv_after_load(module: nn.Module, _incompatible_keys: Any) -> None:
-    _pack_shared_qkv_attention(module)
-
-
-def _register_shared_qkv_load_hook(attention: nn.Module) -> None:
-    if getattr(attention, _SHARED_QKV_LOAD_HOOK_REGISTERED, False):
-        return
-    attention.register_load_state_dict_post_hook(_repack_shared_qkv_after_load)
-    setattr(attention, _SHARED_QKV_LOAD_HOOK_REGISTERED, True)
-
-
-def _pack_shared_qkv_attention(attention: nn.Module) -> None:
-    """Pack Q/K/V storage while preserving their checkpoint Parameters."""
-    q_proj = attention.q_proj
-    k_proj = attention.k_proj
-    v_proj = attention.v_proj
-    projections = (q_proj, k_proj, v_proj)
-    if not all(isinstance(projection, nn.Linear) for projection in projections):
-        raise TypeError("Fun-ASR shared QKV requires three nn.Linear projections")
-    if not all(
-        projection.in_features == q_proj.in_features for projection in projections
-    ):
-        raise ValueError("Fun-ASR shared QKV projections must have the same input size")
-    if not all(
-        projection.out_features == q_proj.out_features for projection in projections
-    ):
-        raise ValueError(
-            "Fun-ASR shared QKV projections must have the same output size"
-        )
-    has_bias = q_proj.bias is not None
-    if any((projection.bias is not None) != has_bias for projection in projections):
-        raise ValueError("Fun-ASR shared QKV projections must agree on bias presence")
-
-    # A model can be moved while inference_mode is active. Build normal tensors
-    # so a later grad-enabled use of the same module remains valid.
-    with torch.inference_mode(False), torch.no_grad():
-        packed_weight = torch.cat(
-            [projection.weight for projection in projections], dim=0
-        ).contiguous()
-        packed_bias = None
-        if has_bias:
-            packed_bias = torch.cat(
-                [projection.bias for projection in projections], dim=0
-            ).contiguous()
-
-        if hasattr(q_proj, _SHARED_QKV_WEIGHT):
-            setattr(q_proj, _SHARED_QKV_WEIGHT, packed_weight)
-            setattr(q_proj, _SHARED_QKV_BIAS, packed_bias)
-        else:
-            q_proj.register_buffer(_SHARED_QKV_WEIGHT, packed_weight, persistent=False)
-            q_proj.register_buffer(_SHARED_QKV_BIAS, packed_bias, persistent=False)
-
-        weight_offset = 0
-        bias_offset = 0
-        for projection in projections:
-            next_weight_offset = weight_offset + projection.out_features
-            # Keep the Parameter objects so checkpoint loaders retain names.
-            projection.weight.data = packed_weight[weight_offset:next_weight_offset]
-            weight_offset = next_weight_offset
-            if has_bias:
-                next_bias_offset = bias_offset + projection.out_features
-                projection.bias.data = packed_bias[bias_offset:next_bias_offset]
-                bias_offset = next_bias_offset
-
-    _register_shared_qkv_load_hook(attention)
-
-
 def _fused_qkv_project(
     x: torch.Tensor,
     q_proj: nn.Linear,
@@ -132,33 +60,11 @@ def _fused_qkv_project(
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     # note (guozhihao): keep separate q/k/v Linears for HF checkpoint names;
     # fuse into one GEMM at runtime.
-    if not torch.is_grad_enabled():
-        packed_weight = getattr(q_proj, _SHARED_QKV_WEIGHT, None)
-        if packed_weight is not None:
-            packed_bias = getattr(q_proj, _SHARED_QKV_BIAS, None)
-            return F.linear(x, packed_weight, packed_bias).chunk(3, dim=-1)
     weight = torch.cat([q_proj.weight, k_proj.weight, v_proj.weight], dim=0)
     bias = None
     if q_proj.bias is not None:
         bias = torch.cat([q_proj.bias, k_proj.bias, v_proj.bias], dim=0)
     return F.linear(x, weight, bias).chunk(3, dim=-1)
-
-
-class _SharedQKVAttention(nn.Module):
-    """Repair opt-in shared QKV storage across module lifecycle operations."""
-
-    q_proj: nn.Linear
-
-    def _apply(self, fn, recurse=True):
-        super()._apply(fn, recurse)
-        if getattr(self.q_proj, _SHARED_QKV_WEIGHT, None) is not None:
-            _pack_shared_qkv_attention(self)
-        return self
-
-    def __setstate__(self, state: dict[str, Any]) -> None:
-        super().__setstate__(state)
-        if getattr(self.q_proj, _SHARED_QKV_WEIGHT, None) is not None:
-            _pack_shared_qkv_attention(self)
 
 
 class SinusoidalPositionEncoder(nn.Module):
@@ -176,7 +82,7 @@ class SinusoidalPositionEncoder(nn.Module):
         return x + encoding
 
 
-class MultiHeadedAttentionSANM(_SharedQKVAttention):
+class MultiHeadedAttentionSANM(nn.Module):
 
     def __init__(
         self,
@@ -363,7 +269,7 @@ class FunAsrNanoAudioEncoder(nn.Module):
         return xs
 
 
-class MultiHeadedAttention(_SharedQKVAttention):
+class MultiHeadedAttention(nn.Module):
 
     def __init__(
         self,
@@ -402,16 +308,6 @@ class MultiHeadedAttention(_SharedQKVAttention):
         )
         out = out.transpose(1, 2).contiguous().view(b, t, self.h * self.d_k)
         return self.out_proj(out)
-
-
-def _enable_shared_qkv(module: nn.Module) -> int:
-    """Install shared Q/K/V storage on Fun-ASR attention modules."""
-    attention_count = 0
-    for child in module.modules():
-        if isinstance(child, (MultiHeadedAttentionSANM, MultiHeadedAttention)):
-            _pack_shared_qkv_attention(child)
-            attention_count += 1
-    return attention_count
 
 
 class AdaptorEncoderLayer(nn.Module):
@@ -542,9 +438,6 @@ class FunAsrNanoForConditionalGeneration(nn.Module):
             dropout_rate=0.0,
             activation_function=config.activation_function,
         )
-        if getattr(config, "enable_fun_asr_shared_qkv", False):
-            _enable_shared_qkv(self.audio_tower)
-            _enable_shared_qkv(self.multi_modal_projector)
         self.language_model = Qwen3ForCausalLM(
             config.text_config,
             quant_config,
