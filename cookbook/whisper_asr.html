@@ -491,7 +491,6 @@
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#prerequisites">Prerequisites</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#server-configuration">Server Configuration</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#encoder-cuda-graph">Encoder CUDA Graph</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#pre-lm-encoder-cache">Pre-LM Encoder Cache</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#prefill-coalescing">Prefill Coalescing</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#async-decode">Async Decode</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#transcribe-audio">Transcribe Audio</a></li>
@@ -545,15 +544,6 @@
 </div>
 <p>The graph is captured after SGLang’s generation graphs. With pre-LM off, raise <code class="docutils literal notranslate"><span class="pre">max_prefill_tokens</span></code> before configuring larger LM-side buckets (12/16). Each request uses the smallest captured bucket that fits its batch. Requests larger than every captured bucket, with a different feature shape, or without a successful capture run eagerly. Startup and first-replay logs identify the captured and executed buckets.</p>
 </section>
-<section id="pre-lm-encoder-cache">
-<h2>Pre-LM Encoder Cache<a class="headerlink" href="#pre-lm-encoder-cache" title="Link to this heading">#</a></h2>
-<p>Pre-LM encoding still merges concurrent requests for the same audio, but its persistent CPU embedding cache is disabled by default because most ASR traffic contains unique audio. This avoids copying each new <code class="docutils literal notranslate"><span class="pre">[1500,</span> <span class="pre">hidden_size]</span></code> encoder output from the GPU before request construction can finish. Workloads that repeatedly transcribe the same audio can opt into the bounded cache by setting a positive entry limit; the default byte limit remains 2 GiB:</p>
-<div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">runtime_overrides</span><span class="p">:</span>
-<span class="w">  </span><span class="nt">asr</span><span class="p">:</span>
-<span class="w">    </span><span class="nt">pre_lm_cache_max_entries</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">4096</span>
-</pre></div>
-</div>
-</section>
 <section id="prefill-coalescing">
 <h2>Prefill Coalescing<a class="headerlink" href="#prefill-coalescing" title="Link to this heading">#</a></h2>
 <p>Whisper builds requests with eight worker threads by default, matching other pre-LM ASR pipelines. The coalescing gate targets two requests, while the default 6,144-token atomic budget lets the LM scheduler admit up to four 1,504-token Whisper requests together. A partial batch waits for at most 6 ms only while another request build is pending; a single request and a partial batch with no remaining build work are released immediately.</p>
@@ -568,7 +558,7 @@
 </section>
 <section id="async-decode">
 <h2>Async Decode<a class="headerlink" href="#async-decode" title="Link to this heading">#</a></h2>
-<p>Whisper enables the shared one-step-lookahead decode path at batch size 2 and above. It overlaps the current decode step’s GPU work with the previous step’s host-side result processing, while batch size 1 remains on the synchronous path. The default running-request limit is 32. Use the shared decode-mode option to compare against synchronous decode or diagnose a request lifecycle issue:</p>
+<p>Whisper enables the shared one-step-lookahead decode path at batch size 2 and above. It overlaps the current decode step’s GPU work with the previous step’s host-side result processing, while batch size 1 remains on the synchronous path. The default running-request limit is 64. Use the shared decode-mode option to compare against synchronous decode or diagnose a request lifecycle issue:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>sgl-omni<span class="w"> </span>serve<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--model-path<span class="w"> </span>openai/whisper-large-v3<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--decode-mode<span class="w"> </span>sync<span class="w"> </span><span class="se">\</span>
@@ -741,13 +731,13 @@ declares in code (<code class="docutils literal notranslate"><span class="pre">W
 <span class="w">  </span>--model-revision<span class="w"> </span>06f233fe06e710322aca913c1bc4249a0d71fce1<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--dataset-revision<span class="w"> </span>27f4c1adee83b5b29b7c4b375f6b976324bda308<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--max-samples<span class="w"> </span><span class="m">128</span><span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--concurrencies<span class="w"> </span><span class="m">1</span>,2,4,8,16,32<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--concurrencies<span class="w"> </span><span class="m">1</span>,2,4,8,16,32,64<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--repeats<span class="w"> </span><span class="m">3</span><span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--warmup<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--dtype<span class="w"> </span>float16<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--cuda-graph<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--torch-compile<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>--max-running-requests<span class="w"> </span><span class="m">32</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>--max-running-requests<span class="w"> </span><span class="m">64</span><span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--mem-fraction-static<span class="w"> </span><span class="m">0</span>.30<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--fingerprint<span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--output<span class="w"> </span>whisper_async.json
@@ -936,33 +926,6 @@ declares in code (<code class="docutils literal notranslate"><span class="pre">W
 </table>
 </div>
 <p>All 4,608 measured requests across both modes completed successfully, and all 2,304 paired transcripts matched exactly. Batch size 1 uses the synchronous fast path, so its 1.6% difference is run-to-run noise rather than async work. At concurrency 32, request-stage profiling measured 614.3 ms synchronous versus 585.5 ms asynchronous P95 from prefill completion to request completion. A separate async-only <code class="docutils literal notranslate"><span class="pre">openai/whisper-base</span></code> budget comparison showed why 6,144 is the default: relative to 4,096, scheduler queue P95 fell from 92.2 ms to 52.2 ms and throughput rose from 134.83 to 166.69 req/s.</p>
-<p>The pre-LM cache comparison used the same H200 with <code class="docutils literal notranslate"><span class="pre">openai/whisper-large-v3</span></code> in FP16 and 128 SeedTTS EN samples at concurrency 32. Every old-default pass started with an empty persistent CPU cache, so the workload measured cache-miss behavior for unique audio. The new default retained concurrent single-flight merging but set <code class="docutils literal notranslate"><span class="pre">pre_lm_cache_max_entries=0</span></code>.</p>
-<div class="pst-scrollable-table-container"><table class="table">
-<thead>
-<tr class="row-odd"><th class="head"><p>Mode</p></th>
-<th class="head text-right"><p>Cold-cache repeats</p></th>
-<th class="head text-right"><p>Throughput</p></th>
-<th class="head text-right"><p>P95 latency</p></th>
-<th class="head text-right"><p>Corpus WER</p></th>
-</tr>
-</thead>
-<tbody>
-<tr class="row-even"><td><p>Old default persistent cache</p></td>
-<td class="text-right"><p>3</p></td>
-<td class="text-right"><p>52.71 req/s</p></td>
-<td class="text-right"><p>0.994 s</p></td>
-<td class="text-right"><p>0.0084</p></td>
-</tr>
-<tr class="row-odd"><td><p>New default (<code class="docutils literal notranslate"><span class="pre">pre_lm_cache_max_entries=0</span></code>)</p></td>
-<td class="text-right"><p>3</p></td>
-<td class="text-right"><p>57.96 req/s</p></td>
-<td class="text-right"><p>0.803 s</p></td>
-<td class="text-right"><p>0.0084</p></td>
-</tr>
-</tbody>
-</table>
-</div>
-<p>Disabling the persistent cache improved throughput by 10.0% and reduced P95 latency by 19.2%. A separate six-concurrency validation produced identical transcripts for all 2,304 paired requests. A 64-request Torch-profiler pass at concurrency 32 verified that the intended path ran: 3.84 MiB embedding Device-to-Host copies fell from 40 to 0, and total pageable Device-to-Host GPU time fell from 38.036 ms to 0.531 ms. Profiler-affected throughput was excluded from the table.</p>
 </section>
 <section id="known-limitations">
 <h2>Known Limitations<a class="headerlink" href="#known-limitations" title="Link to this heading">#</a></h2>
@@ -973,7 +936,10 @@ operational behavior before production deployment.</p></li>
 and <code class="docutils literal notranslate"><span class="pre">vtt</span></code> are not supported and return HTTP 400.</p></li>
 <li><p>Encoder CUDA Graph is enabled by default and requires SGLang generation CUDA
 Graph. Validate the selected buckets before production use.</p></li>
-<li><p>Audio encoding runs before LM admission by default (<code class="docutils literal notranslate"><span class="pre">pre_lm_max_batch_size=8</span></code>, <code class="docutils literal notranslate"><span class="pre">request_build_max_workers=8</span></code>). Its persistent CPU embedding cache is disabled by default; set a positive <code class="docutils literal notranslate"><span class="pre">pre_lm_cache_max_entries</span></code> for repeated-audio workloads. Set <code class="docutils literal notranslate"><span class="pre">enable_pre_lm_encoder:</span> <span class="pre">false</span></code> under <code class="docutils literal notranslate"><span class="pre">runtime_overrides.asr</span></code> to run the encoder inside prefill again.</p></li>
+<li><p>Audio encoding runs before LM admission by default
+(<code class="docutils literal notranslate"><span class="pre">pre_lm_max_batch_size=8</span></code>, <code class="docutils literal notranslate"><span class="pre">request_build_max_workers=8</span></code>). Set
+<code class="docutils literal notranslate"><span class="pre">enable_pre_lm_encoder:</span> <span class="pre">false</span></code> under <code class="docutils literal notranslate"><span class="pre">runtime_overrides.asr</span></code> to run the
+encoder inside prefill again.</p></li>
 <li><p>Prefill budget defaults to 6,144 tokens (<code class="docutils literal notranslate"><span class="pre">⌊6144/1500⌋=4</span></code>) under atomic
 admission (<code class="docutils literal notranslate"><span class="pre">chunked_prefill_size=0</span></code>). This caps LM-side prefill batching
 independently of the pre-LM encoder batch limit.</p></li>
@@ -1043,7 +1009,6 @@ contain Whisper special tokens.</p></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#prerequisites">Prerequisites</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#server-configuration">Server Configuration</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#encoder-cuda-graph">Encoder CUDA Graph</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#pre-lm-encoder-cache">Pre-LM Encoder Cache</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#prefill-coalescing">Prefill Coalescing</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#async-decode">Async Decode</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#transcribe-audio">Transcribe Audio</a></li>

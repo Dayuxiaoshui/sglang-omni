@@ -36,16 +36,6 @@ runtime_overrides:
 
 The graph is captured after SGLang's generation graphs. With pre-LM off, raise `max_prefill_tokens` before configuring larger LM-side buckets (12/16). Each request uses the smallest captured bucket that fits its batch. Requests larger than every captured bucket, with a different feature shape, or without a successful capture run eagerly. Startup and first-replay logs identify the captured and executed buckets.
 
-## Pre-LM Encoder Cache
-
-Pre-LM encoding still merges concurrent requests for the same audio, but its persistent CPU embedding cache is disabled by default because most ASR traffic contains unique audio. This avoids copying each new `[1500, hidden_size]` encoder output from the GPU before request construction can finish. Workloads that repeatedly transcribe the same audio can opt into the bounded cache by setting a positive entry limit; the default byte limit remains 2 GiB:
-
-```yaml
-runtime_overrides:
-  asr:
-    pre_lm_cache_max_entries: 4096
-```
-
 ## Prefill Coalescing
 
 Whisper builds requests with eight worker threads by default, matching other pre-LM ASR pipelines. The coalescing gate targets two requests, while the default 6,144-token atomic budget lets the LM scheduler admit up to four 1,504-token Whisper requests together. A partial batch waits for at most 6 ms only while another request build is pending; a single request and a partial batch with no remaining build work are released immediately.
@@ -63,7 +53,7 @@ runtime_overrides:
 
 ## Async Decode
 
-Whisper enables the shared one-step-lookahead decode path at batch size 2 and above. It overlaps the current decode step's GPU work with the previous step's host-side result processing, while batch size 1 remains on the synchronous path. The default running-request limit is 32. Use the shared decode-mode option to compare against synchronous decode or diagnose a request lifecycle issue:
+Whisper enables the shared one-step-lookahead decode path at batch size 2 and above. It overlaps the current decode step's GPU work with the previous step's host-side result processing, while batch size 1 remains on the synchronous path. The default running-request limit is 64. Use the shared decode-mode option to compare against synchronous decode or diagnose a request lifecycle issue:
 
 ```bash
 sgl-omni serve \
@@ -190,13 +180,13 @@ python -m benchmarks.eval.benchmark_asr_seedtts \
   --model-revision 06f233fe06e710322aca913c1bc4249a0d71fce1 \
   --dataset-revision 27f4c1adee83b5b29b7c4b375f6b976324bda308 \
   --max-samples 128 \
-  --concurrencies 1,2,4,8,16,32 \
+  --concurrencies 1,2,4,8,16,32,64 \
   --repeats 3 \
   --warmup \
   --dtype float16 \
   --cuda-graph \
   --torch-compile \
-  --max-running-requests 32 \
+  --max-running-requests 64 \
   --mem-fraction-static 0.30 \
   --fingerprint \
   --output whisper_async.json
@@ -239,15 +229,6 @@ The async-decode comparison used the 128-sample SeedTTS EN subset on the same H2
 
 All 4,608 measured requests across both modes completed successfully, and all 2,304 paired transcripts matched exactly. Batch size 1 uses the synchronous fast path, so its 1.6% difference is run-to-run noise rather than async work. At concurrency 32, request-stage profiling measured 614.3 ms synchronous versus 585.5 ms asynchronous P95 from prefill completion to request completion. A separate async-only `openai/whisper-base` budget comparison showed why 6,144 is the default: relative to 4,096, scheduler queue P95 fell from 92.2 ms to 52.2 ms and throughput rose from 134.83 to 166.69 req/s.
 
-The pre-LM cache comparison used the same H200 with `openai/whisper-large-v3` in FP16 and 128 SeedTTS EN samples at concurrency 32. Every old-default pass started with an empty persistent CPU cache, so the workload measured cache-miss behavior for unique audio. The new default retained concurrent single-flight merging but set `pre_lm_cache_max_entries=0`.
-
-| Mode | Cold-cache repeats | Throughput | P95 latency | Corpus WER |
-|---|---:|---:|---:|---:|
-| Old default persistent cache | 3 | 52.71 req/s | 0.994 s | 0.0084 |
-| New default (`pre_lm_cache_max_entries=0`) | 3 | 57.96 req/s | 0.803 s | 0.0084 |
-
-Disabling the persistent cache improved throughput by 10.0% and reduced P95 latency by 19.2%. A separate six-concurrency validation produced identical transcripts for all 2,304 paired requests. A 64-request Torch-profiler pass at concurrency 32 verified that the intended path ran: 3.84 MiB embedding Device-to-Host copies fell from 40 to 0, and total pageable Device-to-Host GPU time fell from 38.036 ms to 0.531 ms. Profiler-affected throughput was excluded from the table.
-
 ## Known Limitations
 
 - Whisper ASR remains experimental. Validate checkpoint-specific accuracy and
@@ -256,7 +237,10 @@ Disabling the persistent cache improved throughput by 10.0% and reduced P95 late
   and `vtt` are not supported and return HTTP 400.
 - Encoder CUDA Graph is enabled by default and requires SGLang generation CUDA
   Graph. Validate the selected buckets before production use.
-- Audio encoding runs before LM admission by default (`pre_lm_max_batch_size=8`, `request_build_max_workers=8`). Its persistent CPU embedding cache is disabled by default; set a positive `pre_lm_cache_max_entries` for repeated-audio workloads. Set `enable_pre_lm_encoder: false` under `runtime_overrides.asr` to run the encoder inside prefill again.
+- Audio encoding runs before LM admission by default
+  (`pre_lm_max_batch_size=8`, `request_build_max_workers=8`). Set
+  `enable_pre_lm_encoder: false` under `runtime_overrides.asr` to run the
+  encoder inside prefill again.
 - Prefill budget defaults to 6,144 tokens (`⌊6144/1500⌋=4`) under atomic
   admission (`chunked_prefill_size=0`). This caps LM-side prefill batching
   independently of the pre-LM encoder batch limit.
