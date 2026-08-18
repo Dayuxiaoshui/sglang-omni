@@ -61,7 +61,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.1.2" />
-    <meta name="docbuild:last-update" content="Aug 17, 2026"/>
+    <meta name="docbuild:last-update" content="Aug 18, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -556,12 +556,12 @@ the checkpoint:</p>
 <section id="text-only">
 <h3>Text Only<a class="headerlink" href="#text-only" title="Link to this heading">#</a></h3>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:8000/v1/audio/speech<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{</span>
-<span class="s1">    &quot;model&quot;: &quot;ming-omni-tts&quot;,</span>
-<span class="s1">    &quot;input&quot;: &quot;SGLang-Omni is a great project!&quot;,</span>
-<span class="s1">    &quot;response_format&quot;: &quot;wav&quot;</span>
-<span class="s1">  }&#39;</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span><span class="s1">'{</span>
+<span class="s1">    "model": "ming-omni-tts",</span>
+<span class="s1">    "input": "SGLang-Omni is a great project!",</span>
+<span class="s1">    "response_format": "wav"</span>
+<span class="s1">  }'</span><span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--output<span class="w"> </span>output.wav
 </pre></div>
 </div>
@@ -579,16 +579,16 @@ server with access to the directory containing the clip:</p>
 </div>
 <p>Then submit the reference as a <code class="docutils literal notranslate"><span class="pre">file://</span></code> URL:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>curl<span class="w"> </span>-X<span class="w"> </span>POST<span class="w"> </span>http://localhost:8000/v1/audio/speech<span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>-H<span class="w"> </span><span class="s2">&quot;Content-Type: application/json&quot;</span><span class="w"> </span><span class="se">\</span>
-<span class="w">  </span>-d<span class="w"> </span><span class="s1">&#39;{</span>
-<span class="s1">    &quot;model&quot;: &quot;ming-omni-tts&quot;,</span>
-<span class="s1">    &quot;input&quot;: &quot;Get the trust fund to the bank early.&quot;,</span>
-<span class="s1">    &quot;references&quot;: [{</span>
-<span class="s1">      &quot;audio_path&quot;: &quot;file:///path/to/references/prompt.wav&quot;,</span>
-<span class="s1">      &quot;text&quot;: &quot;We asked over twenty different people, and they all said it was his.&quot;</span>
+<span class="w">  </span>-H<span class="w"> </span><span class="s2">"Content-Type: application/json"</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-d<span class="w"> </span><span class="s1">'{</span>
+<span class="s1">    "model": "ming-omni-tts",</span>
+<span class="s1">    "input": "Get the trust fund to the bank early.",</span>
+<span class="s1">    "references": [{</span>
+<span class="s1">      "audio_path": "file:///path/to/references/prompt.wav",</span>
+<span class="s1">      "text": "We asked over twenty different people, and they all said it was his."</span>
 <span class="s1">    }],</span>
-<span class="s1">    &quot;response_format&quot;: &quot;wav&quot;</span>
-<span class="s1">  }&#39;</span><span class="w"> </span><span class="se">\</span>
+<span class="s1">    "response_format": "wav"</span>
+<span class="s1">  }'</span><span class="w"> </span><span class="se">\</span>
 <span class="w">  </span>--output<span class="w"> </span>cloned.wav
 </pre></div>
 </div>
@@ -642,11 +642,11 @@ server with access to the directory containing the clip:</p>
 </div>
 <p>Advanced FlowLoss controls can be passed through <code class="docutils literal notranslate"><span class="pre">stage_params.tts_engine</span></code>:</p>
 <div class="highlight-json notranslate"><div class="highlight"><pre><span></span><span class="p">{</span>
-<span class="w">  </span><span class="nt">&quot;stage_params&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<span class="w">    </span><span class="nt">&quot;tts_engine&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<span class="w">      </span><span class="nt">&quot;cfg&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">2.0</span><span class="p">,</span>
-<span class="w">      </span><span class="nt">&quot;sigma&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">0.25</span><span class="p">,</span>
-<span class="w">      </span><span class="nt">&quot;temperature&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">0.0</span>
+<span class="w">  </span><span class="nt">"stage_params"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">    </span><span class="nt">"tts_engine"</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
+<span class="w">      </span><span class="nt">"cfg"</span><span class="p">:</span><span class="w"> </span><span class="mf">2.0</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"sigma"</span><span class="p">:</span><span class="w"> </span><span class="mf">0.25</span><span class="p">,</span>
+<span class="w">      </span><span class="nt">"temperature"</span><span class="p">:</span><span class="w"> </span><span class="mf">0.0</span>
 <span class="w">    </span><span class="p">}</span>
 <span class="w">  </span><span class="p">}</span>
 <span class="p">}</span>
@@ -929,7 +929,7 @@ By SGLang-Omni Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Aug 17, 2026.
+  Last updated on Aug 18, 2026.
   <br/>
 </p>
   </div>
