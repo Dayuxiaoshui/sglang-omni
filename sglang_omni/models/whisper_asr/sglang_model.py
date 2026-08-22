@@ -10,6 +10,7 @@ CUDA Graph, and torch.compile paths apply to decode.
 from __future__ import annotations
 
 import logging
+import os
 from collections.abc import Iterable
 from typing import Any
 
@@ -43,6 +44,7 @@ class WhisperDecoderLayerNorm(nn.LayerNorm):
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
         if (
             flashinfer_layer_norm is not None
+            and os.environ.get("FLASHINFER_USE_CUDA_NORM") != "1"
             and hidden_states.is_cuda
             and hidden_states.dtype == torch.float16
             and self.weight is not None
