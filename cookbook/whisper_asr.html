@@ -61,7 +61,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
   <meta name="docsearch:version" content="0.1.3" />
-    <meta name="docbuild:last-update" content="Aug 24, 2026"/>
+    <meta name="docbuild:last-update" content="Aug 25, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -532,7 +532,7 @@
 </section>
 <section id="encoder-cuda-graph">
 <h2>Encoder CUDA Graph<a class="headerlink" href="#encoder-cuda-graph" title="Link to this heading">#</a></h2>
-<p>The encoder CUDA Graph is enabled by default. With pre-LM encoding (the default), capture buckets follow <code class="docutils literal notranslate"><span class="pre">pre_lm_max_batch_size</span></code> (8), so batches <strong>1/2/4/8</strong> are captured. <code class="docutils literal notranslate"><span class="pre">request_build_max_workers</span></code> defaults to 8, matching Qwen3-ASR and Fun-ASR. When <code class="docutils literal notranslate"><span class="pre">enable_pre_lm_encoder</span></code> is false, buckets follow the atomic prefill budget (<code class="docutils literal notranslate"><span class="pre">6144</span> <span class="pre">//</span> <span class="pre">1500</span> <span class="pre">=</span> <span class="pre">4</span></code>). To use eager encoder execution, override the pipeline configuration:</p>
+<p>The encoder CUDA Graph is enabled by default. With pre-LM encoding (the default), capture buckets follow <code class="docutils literal notranslate"><span class="pre">pre_lm_max_batch_size</span></code> (16), so batches <strong>1/2/4/8/12/16</strong> are captured. <code class="docutils literal notranslate"><span class="pre">request_build_max_workers</span></code> defaults to 8, matching Qwen3-ASR and Fun-ASR. When <code class="docutils literal notranslate"><span class="pre">enable_pre_lm_encoder</span></code> is false, buckets follow the atomic prefill budget (<code class="docutils literal notranslate"><span class="pre">6144</span> <span class="pre">//</span> <span class="pre">1500</span> <span class="pre">=</span> <span class="pre">4</span></code>). To use eager encoder execution, override the pipeline configuration:</p>
 <div class="highlight-yaml notranslate"><div class="highlight"><pre><span></span><span class="nt">config_cls</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">WhisperASRPipelineConfig</span>
 <span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">whisper</span>
 <span class="nt">model_path</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">openai/whisper-large-v3-turbo</span>
@@ -937,7 +937,7 @@ and <code class="docutils literal notranslate"><span class="pre">vtt</span></cod
 <li><p>Encoder CUDA Graph is enabled by default and requires SGLang generation CUDA
 Graph. Validate the selected buckets before production use.</p></li>
 <li><p>Audio encoding runs before LM admission by default
-(<code class="docutils literal notranslate"><span class="pre">pre_lm_max_batch_size=8</span></code>, <code class="docutils literal notranslate"><span class="pre">request_build_max_workers=8</span></code>). Set
+(<code class="docutils literal notranslate"><span class="pre">pre_lm_max_batch_size=16</span></code>, <code class="docutils literal notranslate"><span class="pre">request_build_max_workers=8</span></code>). Set
 <code class="docutils literal notranslate"><span class="pre">enable_pre_lm_encoder:</span> <span class="pre">false</span></code> under <code class="docutils literal notranslate"><span class="pre">runtime_overrides.asr</span></code> to run the
 encoder inside prefill again.</p></li>
 <li><p>The pre-LM encoder cache (<code class="docutils literal notranslate"><span class="pre">pre_lm_cache_max_entries=1024</span></code>) keeps its
@@ -1058,7 +1058,7 @@ By SGLang-Omni Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Aug 24, 2026.
+  Last updated on Aug 25, 2026.
   <br/>
 </p>
   </div>
