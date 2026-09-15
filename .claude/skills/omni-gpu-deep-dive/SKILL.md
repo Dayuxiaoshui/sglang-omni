@@ -1,6 +1,6 @@
 ---
 name: omni-gpu-deep-dive
-description: Attribute GPU time in a sglang-omni stage to specific lines of sglang_omni/ python source. Wraps the vendored llm-torch-profiler-analysis backend, adding an omni source-attribution shim, a mapping/formal trace pair with steady-state gates, and per-model workloads. Use when a stage is slower than expected and the question is "which python code is the bottleneck", not "which kernel is hot".
+description: Attribute GPU time in a sglang-omni stage to specific lines of sglang_omni/ python source. Wraps the vendored llm-torch-profiler-analysis backend, adding an omni source-attribution shim, a mapping/formal trace pair with steady-state gates, and the rules for reading its tables on an omni stage. Use when a stage is slower than expected and the question is "which python code is the bottleneck", not "which kernel is hot".
 ---
 
 # omni-gpu-deep-dive
@@ -18,7 +18,9 @@ three things:
    omni frames in both of the backend's two independent ranking ladders (kernel
    table and overlap table) by wrapping them. Parent-repo files are never modified.
 2. **The trace pair and its gates** (`scripts/omni_trace_pair.py`).
-3. **Per-model workloads** (`scripts/workloads/`).
+3. **The workload contract and the omni reading rules** (this file) - what a
+   profiled body has to look like for the numbers to mean anything, and what a
+   given table column is worth on an omni stage.
 
 ## The one rule
 
@@ -62,9 +64,7 @@ cd <repo root>
 S=.claude/skills/omni-gpu-deep-dive/scripts
 export PYTHONPATH=/sgl-workspace/sglang/python:.        # source sglang, not site-packages
 
-python $S/workloads/whisper_encoder.py --output-dir .profiling-runs/<run>/
-# or: python $S/workloads/qwen3_omni_code2wav.py --output-dir .profiling-runs/<run>/
-# or: python $S/workloads/minimax_music3_dit.py   --output-dir .profiling-runs/<run>/
+python my_workload.py --output-dir .profiling-runs/<run>/   # see "The workload" below
 python $S/analyze_omni_profile.py --framework sglang \
     --mapping-input .profiling-runs/<run>/mapping \
     --formal-input  .profiling-runs/<run>/formal \
@@ -75,14 +75,11 @@ python $S/analyze_omni_profile.py --framework sglang \
 (`--kernel-table-limit`, `--pid-substring`, `--merge-profiles`, single-trace
 `--input`, ...). Nothing under `.profiling-runs/` is ever committed.
 
-## Adding a workload
+## The workload
 
-A workload builds the module, builds one realistic input, and hands `capture_pair`
-two callables running *the same work* eager and in the real serving config. Three
-references exist, in different regimes: `whisper_encoder.py` (compute-bound, large
-GEMMs, graphs barely help), `qwen3_omni_code2wav.py` (streaming vocoder window,
-hundreds of microsecond kernels, graphs decisive), `minimax_music3_dit.py`
-(30-step flow-matching loop: heavy kernels *and* launch-bound). ~100-120 lines each.
+You write one per stage - throwaway, ~100 lines with argparse, not committed. It
+builds the module, builds one realistic input, and hands `capture_pair` two
+callables running *the same work* eager and in the real serving config:
 
 ```python
 capture_pair(
