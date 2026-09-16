@@ -45,7 +45,7 @@ _CAPTURE_MARKERS = (
 )
 
 
-def _await_compression(gz_path: Path, *, timeout_s: float = 300.0) -> None:
+def await_compression(gz_path: Path, *, timeout_s: float = 300.0) -> None:
     """TorchProfiler gzips in a background subprocess; the analyzer needs the .gz.
 
     ``gzip -f`` creates the archive before it finishes writing and unlinks the
@@ -61,12 +61,6 @@ def _await_compression(gz_path: Path, *, timeout_s: float = 300.0) -> None:
     raise TimeoutError(f"background gzip did not finish writing {gz_path}")
 
 
-def _event_names(trace_gz: Path) -> list[str]:
-    with gzip.open(trace_gz, "rt") as handle:
-        trace = json.load(handle)
-    return [str(event.get("name", "")) for event in trace.get("traceEvents", [])]
-
-
 def assert_steady_state(
     trace_gz: Path, *, tag: str, allow_capture: bool = False
 ) -> None:
@@ -76,7 +70,9 @@ def assert_steady_state(
     which is the single most common way a profiling run reaches a wrong
     conclusion. Warm up until these are gone rather than subtracting them later.
     """
-    names = _event_names(trace_gz)
+    with gzip.open(trace_gz, "rt") as handle:
+        trace = json.load(handle)
+    names = [str(event.get("name", "")) for event in trace.get("traceEvents", [])]
     markers = _COMPILE_MARKERS if allow_capture else _COMPILE_MARKERS + _CAPTURE_MARKERS
     hits = {marker for marker in markers if any(marker in name for name in names)}
     if hits:
@@ -89,7 +85,7 @@ def assert_steady_state(
 
 def capture(
     *,
-    output_dir: Path,
+    output_dir: Path | str,
     tag: str,
     body: Callable[[], object],
     iters: int,
@@ -97,13 +93,16 @@ def capture(
     with_stack: bool,
     allow_capture: bool = False,
 ) -> Path:
-    """Warm up, record ``iters`` calls of ``body``, gate the trace, return its dir."""
+    """Warm up, record ``iters`` calls of ``body``, gate the trace, return its dir.
+
+    ``output_dir`` is coerced, so an argparse string works without ``type=Path``.
+    """
     for _ in range(warmup):
         body()
     torch.cuda.synchronize()
 
     os.environ["SGLANG_TORCH_PROFILER_WITH_STACK"] = "1" if with_stack else "0"
-    run_dir = output_dir / tag
+    run_dir = Path(output_dir) / tag
     run_dir.mkdir(parents=True, exist_ok=True)
     trace = Path(TorchProfiler.start(str(run_dir / tag), run_id=tag))
     for _ in range(iters):
@@ -111,7 +110,7 @@ def capture(
     torch.cuda.synchronize()
     TorchProfiler.stop(run_id=tag)
 
-    _await_compression(trace)
+    await_compression(trace)
     assert_steady_state(trace, tag=tag, allow_capture=allow_capture)
     print(f"[{tag}] trace -> {trace}")
     return run_dir
@@ -119,7 +118,7 @@ def capture(
 
 def capture_pair(
     *,
-    output_dir: Path,
+    output_dir: Path | str,
     mapping_body: Callable[[], object],
     formal_body: Callable[[], object],
     iters: int = 10,

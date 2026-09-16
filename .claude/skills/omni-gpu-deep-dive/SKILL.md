@@ -98,14 +98,13 @@ hands `capture_pair` two callables running *the same work* eager and in the real
 serving config:
 
 ```python
-from pathlib import Path
 import sys
 
 sys.path.insert(0, ".claude/skills/omni-gpu-deep-dive/scripts")
 from omni_trace_pair import capture_pair
 
 capture_pair(
-    output_dir=Path(args.output_dir),
+    output_dir=args.output_dir,                  # str or Path, both coerced
     mapping_body=lambda: encoder(features),      # eager, no graph, no compile
     formal_body=lambda: runner.run(features),    # what production runs
     iters=args.iters,
@@ -121,8 +120,14 @@ uncompressed path.
 
 Rules for the body:
 
-- **Random weights are fine.** Attribution and kernel shapes follow the module
-  graph and the input shape, not the values.
+- **Random weights are fine only where shapes follow the graph.** For a fixed
+  dataflow stage - conv, attention, GEMM on a known shape - attribution and
+  kernel shapes come from the module graph and the input shape, not the values.
+  They do not where routing is value dependent: MoE expert selection
+  (`ming_omni`, `qwen3_omni`'s thinker, `ming_tts`, `zonos2`) picks which experts
+  run, so random weights give a per-expert token distribution, and therefore a
+  grouped-GEMM shape mix, that nobody serves. Use real weights for those, and
+  say in the report which kind of stage it was.
 - **Capture and compile *before* `capture_pair`.** One-time work inside the
   profiled window is what the gate exists to reject.
 - **One realistic shape per run.** Omni stages are bucketed; a shape nobody
