@@ -35,14 +35,15 @@ grep -q sglang_omni "$OMNI_PROFILER_BACKEND/scripts/profile_common.py" \
   || { echo "backend predates BBuf #96; omni frames will not be attributed"; exit 1; }
 ```
 
-The `grep` is the whole compatibility contract. An older backend still runs and
-still prints three tables, but its path allowlist knows `python/sglang/` and
-`vllm/` and not `sglang_omni/`, so an omni frame is not a preferred source
-location and loses to the torch frame that launched the kernel. Measured below:
-the overlap table's scope column silently becomes `torch/nn/modules/linear.py`.
-The kernel table survived on those traces only because its fallback ranks any
-python frame above a torch runtime frame - a fallback, not the allowlist doing
-its job. Gate on the `grep` rather than trusting that.
+The `grep` is the whole compatibility contract, and it is a hard exit because the
+failure is quiet. An older backend still runs and still prints three tables, but
+its path allowlist knows `python/sglang/` and `vllm/` and not `sglang_omni/`, so
+an omni frame is not a preferred source location and loses to the torch frame
+that launched the kernel: the overlap table's scope column degrades to
+`torch/nn/modules/linear.py` and friends. The kernel table may survive anyway,
+on a fallback that ranks any python frame above a torch runtime frame - which is
+luck, not the allowlist. Verify the backend instead of trusting output that
+looks fine.
 
 ## The One Rule
 
@@ -57,66 +58,6 @@ A python stack exists only when the launch is a real python call, so graph-on ca
 never name your code, and graph-off timings are not the ones you ship. Take
 location from `mapping`, every number from `formal`, and conclude only when a
 kernel is heavy in `formal` *and* attributed in `mapping`.
-
-## Real H200 Validation
-
-An "iter" is one call of the workload body, so each music3 row is one 200-frame
-chunk of 30 DiT steps:
-
-| trace | kernels/iter | GPU ms/iter | wall ms/iter | busy % |
-| --- | ---: | ---: | ---: | ---: |
-| code2wav `mapping` (eager) | 836 | 5.77 | 19.96 | 28.9 |
-| code2wav `formal` (graph on) | 906 | 5.94 | **6.43** | **92.3** |
-| whisper encoder `mapping` (eager) | 399 | 29.07 | 30.17 | 96.3 |
-| whisper encoder `formal` (graph on) | 399 | 29.03 | 29.74 | 97.6 |
-| music3 DiT `mapping` (eager) | 27844 | 524.87 | 875.80 | 59.9 |
-| music3 DiT `formal` (graph on) | 29044 | 527.08 | **553.35** | **95.3** |
-
-Three workloads, three regimes, and a single trace misleads in two of them:
-
-- code2wav's `mapping` trace says "launch-bound, add CUDA graphs"; production
-  has had them for months, 20 -> 6.4 ms. `formal` says 906 kernels per window at
-  median 2.3 us and 92% busy, so the work left is fusion, not launches.
-- whisper's two traces agree within 1% because its kernels are large. Luck, not
-  a rule.
-- music3's GPU time is identical either way, yet graphs still buy 322 ms of wall
-  per chunk: a 30-step serial loop pays launch overhead *around* heavy work, so
-  "busy 60%" is a gap problem and the top kernel rows are a compute problem at
-  the same time.
-
-## Real H20 Validation
-
-Qwen3-ASR-1.7B's audio encoder, real checkpoint weights, batch 2 of 30 s clips
-(128 mel bins x 3000 frames), `iters=10`. The mapping body is the eager tower;
-the formal body captures the 24-layer stack plus `ln_post` into one graph and
-leaves the chunk/conv front end eager, which is the split
-`sglang_omni/models/qwen3_asr/encoder_cuda_graph.py` implements. Both bodies
-returned bit-identical output.
-
-| trace | kernels/iter | GPU ms/iter | wall ms/iter | busy % |
-| --- | ---: | ---: | ---: | ---: |
-| qwen3-asr encoder `mapping` (eager) | 374 | 9.45 | 17.86 | 52.9 |
-| qwen3-asr encoder `formal` (graph on) | 373 | 9.46 | **10.74** | **88.1** |
-
-The music3 regime on a different stage: GPU time is the same to 0.1%, yet the
-graph buys 7.1 ms of wall per iter. Read that as a gap problem and the kernel
-rows as a compute problem, at the same time.
-
-The same pair also measures what the backend capability check is protecting. On
-these two traces the overlap table's "Python scope" column reads:
-
-| kernel | share | backend without omni roots | backend with them |
-| --- | ---: | --- | --- |
-| `nvjet_..._bias_TNT` | 29.7% | `torch/nn/modules/linear.py(124)` | `transformers/.../modeling_qwen3_asr.py(127)` |
-| `nvjet_..._coopB_bias_TNT` | 13.6% | `torch/nn/modules/linear.py(124)` | `sglang_omni/.../encoder_stage.py(32)` |
-| elementwise add | 6.2% | `torch/nn/modules/conv.py(530)` | `sglang_omni/.../encoder_stage.py(32)` |
-| gelu | 4.7% | `transformers/activations.py(88)` | `sglang_omni/.../encoder_stage.py(32)` |
-| layer_norm | 2.4% | `torch/nn/functional.py(2884)` | `transformers/.../modeling_qwen3_asr.py(209)` |
-
-Four of the five top rows point at a torch runtime frame without the omni source
-roots, which by the reading rules below is a gap and not a finding. The failure
-is quiet -- three tables still render, and the kernel table is unaffected -- so
-the check has to be a hard gate, not a warning.
 
 ## Main Flows
 
@@ -221,13 +162,13 @@ mapping trace measured.
   Multiple sites with shares mean one kernel shape is reached from several call
   sites, such as a GEMM used by `fc1`/`fc2` and by `qkv_proj`. That is
   information, not noise.
-- **`transformers/models/...` there is a real answer, not a failure.** Where a
-  stage's compute lives in a vendored HF module and omni only wraps it, as in
-  Code2Wav where omni contributes the graph runner and scheduler and
-  transformers every kernel, the transformers line owns the kernel. Same for
-  `torchaudio/`. What you cannot act on is a *torch runtime* frame such as
-  `torch/nn/modules/linear.py` or `torch/nn/functional.py`: the mapping trace
-  lost the caller, which is a gap and not a finding.
+- **`transformers/models/...` there is a real answer, not a failure.** Plenty of
+  omni stages keep their compute in a vendored HF module and contribute only the
+  graph runner and the scheduler around it; there the transformers line owns the
+  kernel and is the line to edit. Same for `torchaudio/`. What you cannot act on
+  is a *torch runtime* frame such as `torch/nn/modules/linear.py` or
+  `torch/nn/functional.py`: the mapping trace lost the caller, which is a gap and
+  not a finding.
 - **Overlap table's "Python scope" is a majority vote**, not the kernel table's
   top site: it attributes each launch by time window and reports the most common
   site, so a kernel split `:123` 77% / `:93` 23% can show `:93`. For the line to
