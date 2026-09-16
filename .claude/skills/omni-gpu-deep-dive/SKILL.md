@@ -81,6 +81,40 @@ Three workloads, three regimes, and a single trace misleads in two of them:
   "busy 60%" is a gap problem and the top kernel rows are a compute problem at
   the same time.
 
+## Real H20 Validation
+
+Qwen3-ASR-1.7B's audio encoder, real checkpoint weights, batch 2 of 30 s clips
+(128 mel bins x 3000 frames), `iters=10`. The mapping body is the eager tower;
+the formal body captures the 24-layer stack plus `ln_post` into one graph and
+leaves the chunk/conv front end eager, which is the split
+`sglang_omni/models/qwen3_asr/encoder_cuda_graph.py` implements. Both bodies
+returned bit-identical output.
+
+| trace | kernels/iter | GPU ms/iter | wall ms/iter | busy % |
+| --- | ---: | ---: | ---: | ---: |
+| qwen3-asr encoder `mapping` (eager) | 374 | 9.45 | 17.86 | 52.9 |
+| qwen3-asr encoder `formal` (graph on) | 373 | 9.46 | **10.74** | **88.1** |
+
+The music3 regime on a different stage: GPU time is the same to 0.1%, yet the
+graph buys 7.1 ms of wall per iter. Read that as a gap problem and the kernel
+rows as a compute problem, at the same time.
+
+The same pair also measures what the backend capability check is protecting. On
+these two traces the overlap table's "Python scope" column reads:
+
+| kernel | share | backend without omni roots | backend with them |
+| --- | ---: | --- | --- |
+| `nvjet_..._bias_TNT` | 29.7% | `torch/nn/modules/linear.py(124)` | `transformers/.../modeling_qwen3_asr.py(127)` |
+| `nvjet_..._coopB_bias_TNT` | 13.6% | `torch/nn/modules/linear.py(124)` | `sglang_omni/.../encoder_stage.py(32)` |
+| elementwise add | 6.2% | `torch/nn/modules/conv.py(530)` | `sglang_omni/.../encoder_stage.py(32)` |
+| gelu | 4.7% | `transformers/activations.py(88)` | `sglang_omni/.../encoder_stage.py(32)` |
+| layer_norm | 2.4% | `torch/nn/functional.py(2884)` | `transformers/.../modeling_qwen3_asr.py(209)` |
+
+Four of the five top rows point at a torch runtime frame without the omni source
+roots, which by the reading rules below is a gap and not a finding. The failure
+is quiet -- three tables still render, and the kernel table is unaffected -- so
+the check has to be a hard gate, not a warning.
+
 ## Main Flows
 
 ### 1. Capture the pair
