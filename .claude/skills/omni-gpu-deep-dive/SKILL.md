@@ -37,9 +37,12 @@ grep -q sglang_omni "$OMNI_PROFILER_BACKEND/scripts/profile_common.py" \
 
 The `grep` is the whole compatibility contract. An older backend still runs and
 still prints three tables, but its path allowlist knows `python/sglang/` and
-`vllm/` and not `sglang_omni/`, so omni frames lose to torch frames and the
-kernel table names `torch/nn/modules/linear.py` instead of the omni line that
-called it - the one column this skill exists to read.
+`vllm/` and not `sglang_omni/`, so an omni frame is not a preferred source
+location and loses to the torch frame that launched the kernel. Measured below:
+the overlap table's scope column silently becomes `torch/nn/modules/linear.py`.
+The kernel table survived on those traces only because its fallback ranks any
+python frame above a torch runtime frame - a fallback, not the allowlist doing
+its job. Gate on the `grep` rather than trusting that.
 
 ## The One Rule
 
