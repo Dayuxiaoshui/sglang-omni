@@ -67,7 +67,9 @@ def _event_names(trace_gz: Path) -> list[str]:
     return [str(event.get("name", "")) for event in trace.get("traceEvents", [])]
 
 
-def assert_steady_state(trace_gz: Path, *, tag: str, allow_capture: bool = False) -> None:
+def assert_steady_state(
+    trace_gz: Path, *, tag: str, allow_capture: bool = False
+) -> None:
     """Gate: refuse a trace that recorded compilation or graph capture.
 
     A trace with either in it attributes one-time cost to steady-state kernels,
