@@ -8,12 +8,14 @@ in one distinction that is easy to break while editing the marker tuples:
 
 * reject *compiling* and *capturing*
 * accept *compiled* and *captured execution*, because ``cudaGraphLaunch`` is what
-  a healthy formal trace is full of and ``is_torchdynamo_compiling`` is a
-  predicate every HuggingFace forward calls
+  a healthy formal trace is full of, ``is_torchdynamo_compiling`` is a predicate
+  every HuggingFace forward calls, and with ``with_stack`` on, a trace of
+  compiled code carries inductor frames long after compilation finished
 
 ``.claude/`` is not on the pytest path, so the module is loaded by file path.
-Nothing here needs a GPU: the profiler and ``torch.cuda.synchronize`` are
-replaced by fakes so the capture flow itself can be exercised too.
+Nothing here needs a GPU, and nothing here needs the serving runtime: the
+profiler and ``torch.cuda.synchronize`` are replaced by fakes, so the gate and
+the capture flow are both exercised with python and torch alone.
 """
 
 from __future__ import annotations
@@ -21,6 +23,8 @@ from __future__ import annotations
 import gzip
 import importlib.util
 import json
+import sys
+from collections.abc import Iterator
 from pathlib import Path
 from types import ModuleType
 
@@ -35,6 +39,7 @@ _SCRIPT = (
     / "scripts"
     / "omni_trace_pair.py"
 )
+_PROFILER_MODULE = "sglang_omni.profiler.torch_profiler"
 
 
 def _load_module() -> ModuleType:
@@ -46,18 +51,51 @@ def _load_module() -> ModuleType:
 
 
 @pytest.fixture(scope="module")
-def trace_pair() -> ModuleType:
+def trace_pair() -> Iterator[ModuleType]:
+    """Load the skill script with the omni profiler stubbed out.
+
+    The script imports ``TorchProfiler`` for its capture path, and that module
+    reaches ``sglang_omni.platforms`` and on into the ``sglang`` serving runtime
+    -- a GPU stack these CPU tests have no reason to require. The real class is
+    never called here anyway; the capture test substitutes a fake. The stub is
+    unconditional so the tests behave the same wherever they run, and
+    ``test_script_imports_the_profiler_this_file_stubs`` is what keeps it honest.
+    """
     if not _SCRIPT.exists():
         pytest.skip(f"{_SCRIPT} is not present in this checkout")
-    return _load_module()
+
+    stub = ModuleType(_PROFILER_MODULE)
+    stub.TorchProfiler = object
+    saved = sys.modules.get(_PROFILER_MODULE)
+    sys.modules[_PROFILER_MODULE] = stub
+    try:
+        yield _load_module()
+    finally:
+        if saved is None:
+            sys.modules.pop(_PROFILER_MODULE, None)
+        else:
+            sys.modules[_PROFILER_MODULE] = saved
 
 
-def _write_trace(path: Path, event_names: list[str]) -> Path:
-    """Write the minimal gzipped chrome trace the gate reads."""
-    events = [{"name": name, "ph": "X", "ts": 0, "dur": 1} for name in event_names]
+def _write_trace(path: Path, event_names: list[str], *, cat: str = "cpu_op") -> Path:
+    """Write the minimal gzipped chrome trace the gate reads.
+
+    Timestamps increase per event so the samples in a failure message can be
+    told apart, which is the point of reporting them.
+    """
+    events = [
+        {"name": name, "cat": cat, "ph": "X", "ts": index, "dur": 1}
+        for index, name in enumerate(event_names)
+    ]
     with gzip.open(path, "wt") as handle:
         json.dump({"traceEvents": events}, handle)
     return path
+
+
+def test_script_imports_the_profiler_this_file_stubs() -> None:
+    """A stub of a module the script no longer imports would hide a broken import."""
+    assert f"from {_PROFILER_MODULE} import TorchProfiler" in _SCRIPT.read_text()
+    assert (_REPO_ROOT / "sglang_omni" / "profiler" / "torch_profiler.py").exists()
 
 
 def test_gate_accepts_captured_and_compiled_execution(
@@ -80,8 +118,10 @@ def test_gate_accepts_captured_and_compiled_execution(
 @pytest.mark.parametrize(
     "event_name",
     [
-        "torch/_inductor/codecache.py(1234): load",
         "torch/_dynamo/convert_frame.py(900): _compile",
+        "torch/_inductor/compile_fx.py(1500): compile_fx",
+        "torch/_inductor/async_compile.py(300): triton",
+        "torch/_inductor/codecache.py(1234): load",
         "cudaModuleLoad",
         "cuModuleLoad",
     ],
@@ -93,6 +133,64 @@ def test_gate_rejects_compilation(
     trace = _write_trace(tmp_path / "mapping.trace.json.gz", ["aten::mm", event_name])
     with pytest.raises(RuntimeError, match="not steady state"):
         trace_pair.assert_steady_state(trace, tag="mapping")
+
+
+def test_gate_accepts_inductor_frames_that_are_not_compilation(
+    trace_pair: ModuleType, tmp_path: Path
+) -> None:
+    """The false positive that made a real run bypass this gate.
+
+    These four names were observed in a ``with_stack`` trace whose window opened
+    *after* compilation finished: ``output_code.py`` is how an already-compiled
+    graph is entered, and the ``compile_worker`` threads sit in a blocking read
+    for the life of the process, so they land in every trace. A gate that
+    rejects them fails clean runs, and a gate that fails clean runs gets
+    bypassed -- which is worse than not having one.
+    """
+    trace = _write_trace(
+        tmp_path / "mapping.trace.json.gz",
+        [
+            "torch/_inductor/output_code.py(581): __call__",
+            "torch/_inductor/compile_worker/subproc_pool.py(195): _read_thread",
+            "torch/_inductor/compile_worker/subproc_pool.py(61): _recv_msg",
+            "torch/_inductor/runtime/autotune_cache.py(481): end_compile",
+            "aten::mm",
+        ],
+        cat="python_function",
+    )
+    trace_pair.assert_steady_state(trace, tag="mapping")
+
+
+def test_gate_failure_names_the_matched_events_with_category_and_timestamp(
+    trace_pair: ModuleType, tmp_path: Path
+) -> None:
+    """The marker substring alone cannot tell a stack frame from real work."""
+    trace = _write_trace(
+        tmp_path / "mapping.trace.json.gz",
+        ["aten::mm", "torch/_inductor/compile_fx.py(1500): compile_fx"],
+        cat="python_function",
+    )
+    with pytest.raises(RuntimeError) as excinfo:
+        trace_pair.assert_steady_state(trace, tag="mapping")
+
+    message = str(excinfo.value)
+    assert "torch/_inductor/compile_fx.py(1500): compile_fx" in message
+    assert "cat=python_function" in message
+    assert "ts=1" in message
+
+
+def test_violations_are_bounded_so_one_marker_cannot_flood_the_message(
+    trace_pair: ModuleType, tmp_path: Path
+) -> None:
+    """A real mapping trace runs to hundreds of MB; the report stays readable."""
+    trace = _write_trace(
+        tmp_path / "mapping.trace.json.gz",
+        ["torch/_inductor/compile_fx.py(1500): compile_fx"] * 50 + ["aten::mm"],
+        cat="python_function",
+    )
+    hits = trace_pair.steady_state_violations(trace, samples=3)
+    assert list(hits) == ["torch/_inductor/compile_fx"]
+    assert len(hits["torch/_inductor/compile_fx"]) == 3
 
 
 @pytest.mark.parametrize(

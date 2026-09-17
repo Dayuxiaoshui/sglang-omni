@@ -28,12 +28,19 @@ from sglang_omni.profiler.torch_profiler import TorchProfiler
 
 # Substrings that mean the trace caught one-time work rather than steady state.
 # Matched against every event name, so each must be unable to appear as ordinary
-# steady-state activity: a predicate like ``is_torchdynamo_compiling`` is called
-# on every forward, which is why bare "dynamo" is not on this list.
+# steady-state activity. Two traps this list is shaped around:
+#   * ``is_torchdynamo_compiling`` is a predicate every HF forward calls, which
+#     is why bare "dynamo" is not here.
+#   * bare "torch/_inductor/" matches ``output_code.py``, the entry point of
+#     already-*compiled* code, and the ``compile_worker`` threads that sit in a
+#     blocking read for the life of the process. Both appear in a healthy
+#     steady-state trace, so only the compile-side subpaths are listed.
 _COMPILE_MARKERS = (
-    "torch/_inductor/",             # inductor codegen frames
-    "torch/_dynamo/convert_frame",  # the tracer entry, not the is-compiling predicate
-    "cudaModuleLoad",               # JIT load of a freshly compiled kernel
+    "torch/_dynamo/convert_frame",  # the tracer entry
+    "torch/_inductor/compile_fx",  # inductor compile entry
+    "torch/_inductor/async_compile",
+    "torch/_inductor/codecache",  # codegen, and fx-graph-cache loads
+    "cudaModuleLoad",  # JIT load of a freshly compiled kernel
     "cuModuleLoad",
 )
 # Capture, not replay: cudaGraphLaunch is exactly what a formal trace should be
@@ -61,6 +68,32 @@ def await_compression(gz_path: Path, *, timeout_s: float = 300.0) -> None:
     raise TimeoutError(f"background gzip did not finish writing {gz_path}")
 
 
+def steady_state_violations(
+    trace_gz: Path, *, allow_capture: bool = False, samples: int = 3
+) -> dict[str, list[str]]:
+    """Map each matched marker to up to ``samples`` of the events that matched it.
+
+    One pass over the events, because a mapping trace of a real stage runs to
+    hundreds of MB. Each sample carries the event's category and timestamp: the
+    category says whether the match is a python stack frame or a runtime call,
+    and the timestamps say whether the one-time work sits at the start of the
+    window or recurs through it.
+    """
+    markers = _COMPILE_MARKERS if allow_capture else _COMPILE_MARKERS + _CAPTURE_MARKERS
+    with gzip.open(trace_gz, "rt") as handle:
+        trace = json.load(handle)
+    hits: dict[str, list[str]] = {}
+    for event in trace.get("traceEvents", []):
+        name = str(event.get("name", ""))
+        for marker in markers:
+            if marker not in name:
+                continue
+            seen = hits.setdefault(marker, [])
+            if len(seen) < samples:
+                seen.append(f"{name} [cat={event.get('cat')} ts={event.get('ts')}]")
+    return hits
+
+
 def assert_steady_state(
     trace_gz: Path, *, tag: str, allow_capture: bool = False
 ) -> None:
@@ -70,16 +103,18 @@ def assert_steady_state(
     which is the single most common way a profiling run reaches a wrong
     conclusion. Warm up until these are gone rather than subtracting them later.
     """
-    with gzip.open(trace_gz, "rt") as handle:
-        trace = json.load(handle)
-    names = [str(event.get("name", "")) for event in trace.get("traceEvents", [])]
-    markers = _COMPILE_MARKERS if allow_capture else _COMPILE_MARKERS + _CAPTURE_MARKERS
-    hits = {marker for marker in markers if any(marker in name for name in names)}
+    hits = steady_state_violations(trace_gz, allow_capture=allow_capture)
     if hits:
+        detail = "\n".join(
+            f"  {marker}\n" + "\n".join(f"    {sample}" for sample in samples)
+            for marker, samples in sorted(hits.items())
+        )
         raise RuntimeError(
-            f"[{tag}] trace is not steady state: saw {sorted(hits)} in {trace_gz}. "
+            f"[{tag}] trace is not steady state: {trace_gz}\n{detail}\n"
             "Increase --warmup (and warm every shape bucket) so compile and "
-            "capture finish before the profiler starts."
+            "capture finish before the profiler starts. Timestamps bunched at "
+            "the window start mean one shape bucket went unwarmed; timestamps "
+            "spread across it mean something recompiles every call."
         )
 
 
