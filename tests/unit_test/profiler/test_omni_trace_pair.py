@@ -13,9 +13,9 @@ in one distinction that is easy to break while editing the marker tuples:
   compiled code carries inductor frames long after compilation finished
 
 ``.claude/`` is not on the pytest path, so the module is loaded by file path.
-Nothing here needs a GPU, and nothing here needs the serving runtime: the
-profiler and ``torch.cuda.synchronize`` are replaced by fakes, so the gate and
-the capture flow are both exercised with python and torch alone.
+Nothing here needs a GPU, and nothing here needs the serving runtime: only
+``capture`` imports omni's profiler, and the tests replace it and
+``torch.cuda.synchronize`` with fakes.
 """
 
 from __future__ import annotations
@@ -24,7 +24,6 @@ import gzip
 import importlib.util
 import json
 import sys
-from collections.abc import Iterator
 from pathlib import Path
 from types import ModuleType
 
@@ -51,30 +50,10 @@ def _load_module() -> ModuleType:
 
 
 @pytest.fixture(scope="module")
-def trace_pair() -> Iterator[ModuleType]:
-    """Load the skill script with the omni profiler stubbed out.
-
-    The script imports ``TorchProfiler`` for its capture path, and that module
-    reaches ``sglang_omni.platforms`` and on into the ``sglang`` serving runtime
-    -- a GPU stack these CPU tests have no reason to require. The real class is
-    never called here anyway; the capture test substitutes a fake. The stub is
-    unconditional so the tests behave the same wherever they run, and
-    ``test_script_imports_the_profiler_this_file_stubs`` is what keeps it honest.
-    """
+def trace_pair() -> ModuleType:
     if not _SCRIPT.exists():
         pytest.skip(f"{_SCRIPT} is not present in this checkout")
-
-    stub = ModuleType(_PROFILER_MODULE)
-    stub.TorchProfiler = object
-    saved = sys.modules.get(_PROFILER_MODULE)
-    sys.modules[_PROFILER_MODULE] = stub
-    try:
-        yield _load_module()
-    finally:
-        if saved is None:
-            sys.modules.pop(_PROFILER_MODULE, None)
-        else:
-            sys.modules[_PROFILER_MODULE] = saved
+    return _load_module()
 
 
 def _write_trace(path: Path, event_names: list[str], *, cat: str = "cpu_op") -> Path:
@@ -92,10 +71,22 @@ def _write_trace(path: Path, event_names: list[str], *, cat: str = "cpu_op") -> 
     return path
 
 
-def test_script_imports_the_profiler_this_file_stubs() -> None:
-    """A stub of a module the script no longer imports would hide a broken import."""
-    assert f"from {_PROFILER_MODULE} import TorchProfiler" in _SCRIPT.read_text()
-    assert (_REPO_ROOT / "sglang_omni" / "profiler" / "torch_profiler.py").exists()
+def test_the_gate_imports_without_the_serving_runtime(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only ``capture`` needs omni's profiler; the gate is stdlib plus torch.
+
+    A ``None`` entry in ``sys.modules`` makes that import raise, which stands in
+    for the common case: a stage that is plain torch, on a box without the
+    pinned CUDA stack that ``sglang`` pulls in. Such a stage can capture with
+    ``torch.profiler`` itself, and it should still be able to gate the result.
+    """
+    monkeypatch.setitem(sys.modules, _PROFILER_MODULE, None)
+    module = _load_module()
+    trace = _write_trace(tmp_path / "formal.trace.json.gz", ["cudaGraphLaunch"])
+    module.assert_steady_state(trace, tag="formal")
+    with pytest.raises(ImportError):
+        module._torch_profiler()
 
 
 def test_gate_accepts_captured_and_compiled_execution(
@@ -268,7 +259,7 @@ def test_capture_accepts_a_string_output_dir_and_gates_the_trace(
         def stop(*, run_id: str | None = None) -> None:
             calls.append(f"stop:{run_id}")
 
-    monkeypatch.setattr(trace_pair, "TorchProfiler", FakeProfiler)
+    monkeypatch.setattr(trace_pair, "_torch_profiler", lambda: FakeProfiler)
     monkeypatch.setattr(trace_pair.torch.cuda, "synchronize", lambda: None)
 
     run_dir = trace_pair.capture(

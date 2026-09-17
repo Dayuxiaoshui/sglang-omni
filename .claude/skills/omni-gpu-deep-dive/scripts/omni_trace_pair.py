@@ -24,7 +24,20 @@ from typing import Callable
 
 import torch
 
-from sglang_omni.profiler.torch_profiler import TorchProfiler
+
+def _torch_profiler() -> type:
+    """Import omni's profiler where it is used, not at module scope.
+
+    The gate below is stdlib-only, and useful on its own: a stage that is plain
+    torch can capture with ``torch.profiler`` directly and still gate the
+    result. Importing ``TorchProfiler`` at module scope would drag the whole
+    serving runtime -- ``sglang``, and through it the pinned CUDA stack -- into
+    that case, for a stage that never touches it.
+    """
+    from sglang_omni.profiler.torch_profiler import TorchProfiler
+
+    return TorchProfiler
+
 
 # Substrings that mean the trace caught one-time work rather than steady state.
 # Matched against every event name, so each must be unable to appear as ordinary
@@ -136,14 +149,15 @@ def capture(
         body()
     torch.cuda.synchronize()
 
+    profiler = _torch_profiler()
     os.environ["SGLANG_TORCH_PROFILER_WITH_STACK"] = "1" if with_stack else "0"
     run_dir = Path(output_dir) / tag
     run_dir.mkdir(parents=True, exist_ok=True)
-    trace = Path(TorchProfiler.start(str(run_dir / tag), run_id=tag))
+    trace = Path(profiler.start(str(run_dir / tag), run_id=tag))
     for _ in range(iters):
         body()
     torch.cuda.synchronize()
-    TorchProfiler.stop(run_id=tag)
+    profiler.stop(run_id=tag)
 
     await_compression(trace)
     assert_steady_state(trace, tag=tag, allow_capture=allow_capture)
