@@ -35,15 +35,13 @@ grep -q sglang_omni "$OMNI_PROFILER_BACKEND/scripts/profile_common.py" \
   || { echo "backend predates BBuf #96; omni frames will not be attributed"; exit 1; }
 ```
 
-The `grep` is the whole compatibility contract, and it is a hard exit because the
-failure is quiet. An older backend still runs and still prints three tables, but
-its path allowlist knows `python/sglang/` and `vllm/` and not `sglang_omni/`, so
-an omni frame is not a preferred source location and loses to the torch frame
-that launched the kernel: the overlap table's scope column degrades to
-`torch/nn/modules/linear.py` and friends. The kernel table may survive anyway,
-on a fallback that ranks any python frame above a torch runtime frame - which is
-luck, not the allowlist. Verify the backend instead of trusting output that
-looks fine.
+A hard exit, because the failure is quiet. An older backend still runs and still
+prints three tables, but its path allowlist knows `python/sglang/` and `vllm/`
+and not `sglang_omni/`, so an omni frame loses to the torch frame that launched
+the kernel and the overlap table's scope degrades to `torch/nn/modules/linear.py`
+and friends. The kernel table may survive on a fallback that ranks any python
+frame above a torch runtime frame - luck, not the allowlist. Verify the backend
+rather than trust output that looks fine.
 
 ## The One Rule
 
@@ -113,10 +111,21 @@ Rules for the body:
 - **Same work on both sides.** If `formal_body` covers less than `mapping_body`,
   the shares are not comparable.
 
-To capture from a running omni server instead, the mapping-side equivalent of
-eager is `<stage>.engine.disable_cuda_graph = true` in the stage config plus
-`SGLANG_TORCH_PROFILER_WITH_STACK=1`, and the gates below are then yours to
-enforce.
+To capture from a running omni server instead:
+
+- **Use the graph toggle the profiled stage declares.** `engine.*` exists only on
+  stages that drive an SGLang engine, so `<stage>.engine.disable_cuda_graph` is a
+  `ConfigPathError` anywhere else. A non-engine stage keeps its own switch under
+  `factory.*`: Fun-CosyVoice3's vocoder is
+  `--vocoder.factory.enable_flow_cuda_graph false`, while its AR stage is
+  `--tts-engine.engine.disable_cuda_graph true`. Read the stage's config class
+  before assuming a name.
+- Export `SGLANG_TORCH_PROFILER_WITH_STACK=1` before the server starts, and
+  `SGLANG_TORCH_PROFILER_DIR` unless the request carries `trace_path_template`.
+- Warm the server, `/start_profile`, send few requests - stages sharing a process
+  share a trace - let them **finish**, then `/stop_profile`. Confirm
+  `Trace exported to` in the log and that the `.gz` exists before analyzing.
+- Nothing on this path calls `assert_steady_state`, so gate the traces yourself.
 
 ### 2. Analyze the pair
 
@@ -140,10 +149,19 @@ cost charged to a steady-state kernel is the most common way a run reaches a
 confident wrong answer. Warm every shape bucket until the gate passes; never
 subtract the cost afterwards.
 
-The gate rejects compiling and capturing, not *compiled* or *captured
-execution*: `cudaGraphLaunch` is what a healthy formal trace is full of, and
-`is_torchdynamo_compiling` is a predicate every HF forward calls. If you widen
-`_COMPILE_MARKERS`, keep that distinction or the gate will block clean runs.
+It rejects compiling and capturing, not *compiled* or *captured execution*, and
+that line is narrow. `cudaGraphLaunch` is what a healthy formal trace is full of;
+`is_torchdynamo_compiling` is a predicate every HF forward calls;
+`torch/_inductor/output_code.py` is how compiled code is *entered*; and
+inductor's `compile_worker` threads sit in a blocking read for the life of the
+process, so they appear in every trace. The markers therefore name compile-side
+subpaths only, and widening them means naming subpaths too - a gate that fails
+clean runs gets bypassed, and a bypassed gate is worse than none.
+
+A failure prints each matched event with its category and timestamp, because the
+substring alone cannot separate a stack frame from real work: timestamps at the
+window start mean one shape bucket went unwarmed, timestamps across the whole
+window mean something recompiles every call.
 
 **After** - accept a change on the `formal` config only. Mapping-trace deltas
 prove nothing about serving, because the graph replaces the launch path the
@@ -155,6 +173,12 @@ mapping trace measured.
 - Then performance, graph-on: **A/A** first, base against base, for the noise
   floor, then a **paired A/B in both orders**. If the orders disagree, you
   measured drift - warm-up, clocks, other tenants - not your change.
+- **Prove the flag you toggled is on the executed path.** A startup log saying a
+  backbone compiled or a graph captured proves the wrapper was installed, not
+  that serving calls it: a stage that reimplements a forward over the same
+  submodules bypasses a wrapper on that forward, silently, and the log still says
+  success. Cheapest proof is a `mapping` trace that names the wrapped function.
+  Without it, a measured delta belongs to the run, not to the flag.
 
 ## Reading The Report
 
@@ -194,26 +218,26 @@ The LLM north star, "tensor cores never idle", is wrong for most omni stages:
 
 ## Where This Sits
 
-Stage 2 of three, and worth little without the other two.
+Stage 2 of three, and worth little without the other two. `model-profiling` owns
+stage 1 and the record of the outcome - it plans the run, gets human
+confirmation, tracks findings - so start there and come back to it with the
+answer.
 
-1. **Triage** - find the *stage* from the request event timeline, before any
-   profiler. Read `py-spy` **per thread**, not aggregated: an omni stage's cost
-   is usually one thread's and the aggregate hides which. For TTS, measure cold
-   reference and hot reference separately - different workloads, and a mean over
-   both describes neither.
+1. **Triage** - find the slow *stage* before any profiler: `model-profiling`'s
+   `METHODOLOGY.md`, layers 1 and 2.
 2. **GPU deep dive** - this skill: one stage, one shape, the trace pair, the
    kernel table's python location. Escalate to `nsys` for SM headroom only when
    the report leaves no clear change point.
 3. **Validation** - the **After** gate above.
 
-`model-profiling` owns stage 1 and the record of the outcome: it plans the run,
-gets human confirmation, and tracks findings. Use it first, and go back to it
-with the answer.
-
 ## Output Contract
 
 Return:
 
+- **the runtime SHA and the skill SHA, separately.** Checking out a branch to
+  load this skill does not make that branch the runtime under test. Unless the
+  task names a revision, profile `main` and record both, so a conclusion can be
+  pinned to the code it was measured on.
 - the mapping and formal trace paths, and the backend path used
 - kernel table, overlap-opportunity table, fuse-pattern table
 - the `sglang_omni/...:<line>` locations the kernel table attributed, or an
