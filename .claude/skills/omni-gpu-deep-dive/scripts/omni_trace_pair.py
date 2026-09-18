@@ -48,11 +48,23 @@ def _torch_profiler() -> type:
 #     already-*compiled* code, and the ``compile_worker`` threads that sit in a
 #     blocking read for the life of the process. Both appear in a healthy
 #     steady-state trace, so only the compile-side subpaths are listed.
+# The path markers are python stack frames, so they exist only with
+# ``with_stack`` on. A formal trace records without stacks, and there the gate
+# rests on the first three entries: Dynamo's timed regions are plain
+# ``user_annotation`` events, present on a compile or an fx-graph-cache hit with
+# stacks on or off and absent once warmed. Their names differ by torch version
+# (``entire_frame_compile`` / ``backend_compile`` on 2.13,
+# ``_compile.compile_inner`` / ``compile_fx_inner`` on 2.8) but every one of
+# them carries the ``(dynamo_timed)`` suffix.
 _COMPILE_MARKERS = (
+    "(dynamo_timed)",  # any Dynamo timed region
+    "entire_frame_compile",  # torch 2.13's name for the whole frame compile
+    "backend_compile",  # torch 2.13's name for inductor / fx-graph-cache hits
     "torch/_dynamo/convert_frame",  # the tracer entry
     "torch/_inductor/compile_fx",  # inductor compile entry
     "torch/_inductor/async_compile",
     "torch/_inductor/codecache",  # codegen, and fx-graph-cache loads
+    "Lazy Function Loading",  # the profiler's name for a first-call kernel load
     "cudaModuleLoad",  # JIT load of a freshly compiled kernel
     "cuModuleLoad",
 )
@@ -154,10 +166,14 @@ def capture(
     run_dir = Path(output_dir) / tag
     run_dir.mkdir(parents=True, exist_ok=True)
     trace = Path(profiler.start(str(run_dir / tag), run_id=tag))
-    for _ in range(iters):
-        body()
-    torch.cuda.synchronize()
-    profiler.stop(run_id=tag)
+    try:
+        for _ in range(iters):
+            body()
+        torch.cuda.synchronize()
+    finally:
+        # A profiler left running past an exception has crashed the interpreter
+        # at exit, and blocks the next capture in the same process.
+        profiler.stop(run_id=tag)
 
     await_compression(trace)
     assert_steady_state(trace, tag=tag, allow_capture=allow_capture)

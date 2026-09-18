@@ -123,8 +123,10 @@ To capture from a running omni server instead:
 - Export `SGLANG_TORCH_PROFILER_WITH_STACK=1` before the server starts, and
   `SGLANG_TORCH_PROFILER_DIR` unless the request carries `trace_path_template`.
 - Warm the server, `/start_profile`, send few requests - stages sharing a process
-  share a trace - let them **finish**, then `/stop_profile`. Confirm
-  `Trace exported to` in the log and that the `.gz` exists before analyzing.
+  share a trace - let them **finish**, then `/stop_profile`. `Trace exported to`
+  is logged before the background `gzip` finishes, and the `.gz` exists while it
+  is still partial. The trace is complete when the sibling `.trace.json` is
+  gone; wait for that, as `await_compression` does, before analyzing.
 - Nothing on this path calls `assert_steady_state`, so gate the traces yourself.
 
 ### 2. Analyze the pair
@@ -134,10 +136,12 @@ python3 "$OMNI_PROFILER_BACKEND/scripts/analyze_llm_torch_profile.py" \
   --framework sglang \
   --mapping-input .profiling-runs/<run>/mapping \
   --formal-input  .profiling-runs/<run>/formal \
-  --output-dir    .profiling-runs/<run>/report
+  | tee .profiling-runs/<run>/report.md
 ```
 
-Every backend flag applies, including `--kernel-table-limit`, `--pid-substring`,
+The three tables go to stdout and nowhere else; the backend's `--output-dir` is
+where a `--url` capture lands, and is ignored with `--*-input`. Every other
+backend flag applies, including `--kernel-table-limit`, `--pid-substring`,
 `--merge-profiles`, and single-trace `--input`. Nothing under `.profiling-runs/`
 is committed.
 
@@ -156,7 +160,11 @@ that line is narrow. `cudaGraphLaunch` is what a healthy formal trace is full of
 inductor's `compile_worker` threads sit in a blocking read for the life of the
 process, so they appear in every trace. The markers therefore name compile-side
 subpaths only, and widening them means naming subpaths too - a gate that fails
-clean runs gets bypassed, and a bypassed gate is worse than none.
+clean runs gets bypassed, and a bypassed gate is worse than none. Those subpaths
+are python frames, and a `formal` trace has none, so there the gate rests on
+Dynamo's timed regions - plain events with the `(dynamo_timed)` suffix, present
+with stacks on or off, covering fx-graph-cache hits as well - and on the
+profiler's first-call kernel load, `Lazy Function Loading`.
 
 A failure prints each matched event with its category and timestamp, because the
 substring alone cannot separate a stack frame from real work: timestamps at the

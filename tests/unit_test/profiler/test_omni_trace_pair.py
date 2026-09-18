@@ -126,6 +126,35 @@ def test_gate_rejects_compilation(
         trace_pair.assert_steady_state(trace, tag="mapping")
 
 
+@pytest.mark.parametrize(
+    "event_name",
+    [
+        "entire_frame_compile",  # torch 2.13
+        "backend_compile",  # torch 2.13, also an fx-graph-cache hit
+        "_compile.compile_inner (dynamo_timed)",  # torch 2.8
+        "compile_fx_inner (dynamo_timed)",  # torch 2.8
+        "Lazy Function Loading",  # first call of a kernel, any version
+    ],
+)
+def test_gate_rejects_compilation_without_python_stacks(
+    trace_pair: ModuleType, tmp_path: Path, event_name: str
+) -> None:
+    """A formal trace has no python stacks, so the path markers never appear in it.
+
+    A cold ``torch.compile`` inside a formal capture used to pass the gate for
+    that reason. Dynamo's timed regions are plain events, present on a compile
+    or an fx-graph-cache hit with stacks on or off, and absent once warmed; the
+    names change between torch versions, the ``(dynamo_timed)`` suffix does not.
+    """
+    trace = _write_trace(
+        tmp_path / "formal.trace.json.gz",
+        ["cudaGraphLaunch", event_name, "aten::mm"],
+        cat="user_annotation",
+    )
+    with pytest.raises(RuntimeError, match="not steady state"):
+        trace_pair.assert_steady_state(trace, tag="formal")
+
+
 def test_gate_accepts_inductor_frames_that_are_not_compilation(
     trace_pair: ModuleType, tmp_path: Path
 ) -> None:
@@ -274,3 +303,42 @@ def test_capture_accepts_a_string_output_dir_and_gates_the_trace(
     assert run_dir == tmp_path / "run" / "mapping"
     assert seen_with_stack == ["1"]
     assert calls == ["body", "body", "start:mapping"] + ["body"] * 3 + ["stop:mapping"]
+
+
+def test_capture_stops_the_profiler_when_the_body_raises(
+    trace_pair: ModuleType, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A profiler left active past an exception crashed the interpreter at exit.
+
+    The error still propagates; what changes is that ``stop`` runs first.
+    """
+    calls: list[str] = []
+
+    class FakeProfiler:
+        @staticmethod
+        def start(trace_path_template: str, run_id: str | None = None) -> str:
+            calls.append(f"start:{run_id}")
+            return f"{trace_path_template}_rank0.trace.json.gz"
+
+        @staticmethod
+        def stop(*, run_id: str | None = None) -> None:
+            calls.append(f"stop:{run_id}")
+
+    def body() -> None:
+        calls.append("body")
+        raise RuntimeError("shape bucket missing")
+
+    monkeypatch.setattr(trace_pair, "_torch_profiler", lambda: FakeProfiler)
+    monkeypatch.setattr(trace_pair.torch.cuda, "synchronize", lambda: None)
+
+    with pytest.raises(RuntimeError, match="shape bucket missing"):
+        trace_pair.capture(
+            output_dir=tmp_path,
+            tag="formal",
+            body=body,
+            iters=3,
+            warmup=0,
+            with_stack=False,
+        )
+
+    assert calls == ["start:formal", "body", "stop:formal"]
