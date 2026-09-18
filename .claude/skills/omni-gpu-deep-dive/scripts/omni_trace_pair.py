@@ -20,20 +20,19 @@ import json
 import os
 import time
 from pathlib import Path
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
 import torch
 
+if TYPE_CHECKING:
+    from sglang_omni.profiler.torch_profiler import TorchProfiler
 
-def _torch_profiler() -> type:
-    """Import omni's profiler where it is used, not at module scope.
+_WITH_STACK_ENV = "SGLANG_TORCH_PROFILER_WITH_STACK"
 
-    The gate below is stdlib-only, and useful on its own: a stage that is plain
-    torch can capture with ``torch.profiler`` directly and still gate the
-    result. Importing ``TorchProfiler`` at module scope would drag the whole
-    serving runtime -- ``sglang``, and through it the pinned CUDA stack -- into
-    that case, for a stage that never touches it.
-    """
+
+def _torch_profiler() -> type[TorchProfiler]:
+    """Imported where used: the gate is stdlib-only and must stay importable on a
+    box without the serving runtime that ``TorchProfiler`` pulls in."""
     from sglang_omni.profiler.torch_profiler import TorchProfiler
 
     return TorchProfiler
@@ -41,30 +40,21 @@ def _torch_profiler() -> type:
 
 # Substrings that mean the trace caught one-time work rather than steady state.
 # Matched against every event name, so each must be unable to appear as ordinary
-# steady-state activity. Two traps this list is shaped around:
-#   * ``is_torchdynamo_compiling`` is a predicate every HF forward calls, which
-#     is why bare "dynamo" is not here.
-#   * bare "torch/_inductor/" matches ``output_code.py``, the entry point of
-#     already-*compiled* code, and the ``compile_worker`` threads that sit in a
-#     blocking read for the life of the process. Both appear in a healthy
-#     steady-state trace, so only the compile-side subpaths are listed.
-# The path markers are python stack frames, so they exist only with
-# ``with_stack`` on. A formal trace records without stacks, and there the gate
-# rests on the first three entries: Dynamo's timed regions are plain
-# ``user_annotation`` events, present on a compile or an fx-graph-cache hit with
-# stacks on or off and absent once warmed. Their names differ by torch version
-# (``entire_frame_compile`` / ``backend_compile`` on 2.13,
-# ``_compile.compile_inner`` / ``compile_fx_inner`` on 2.8) but every one of
-# them carries the ``(dynamo_timed)`` suffix.
+# steady-state activity: ``is_torchdynamo_compiling`` is a predicate every HF
+# forward calls, and bare ``torch/_inductor/`` matches the entry point of
+# already-compiled code, so the path markers name compile-side subpaths only.
+# Path markers are python frames and a formal trace has none; there the gate
+# rests on Dynamo's timed regions (named per torch version, always suffixed
+# ``(dynamo_timed)``) and the profiler's first-call kernel load.
 _COMPILE_MARKERS = (
-    "(dynamo_timed)",  # any Dynamo timed region
-    "entire_frame_compile",  # torch 2.13's name for the whole frame compile
-    "backend_compile",  # torch 2.13's name for inductor / fx-graph-cache hits
+    "(dynamo_timed)",
+    "entire_frame_compile",  # torch 2.13
+    "backend_compile",  # torch 2.13, also an fx-graph-cache hit
     "torch/_dynamo/convert_frame",  # the tracer entry
     "torch/_inductor/compile_fx",  # inductor compile entry
     "torch/_inductor/async_compile",
     "torch/_inductor/codecache",  # codegen, and fx-graph-cache loads
-    "Lazy Function Loading",  # the profiler's name for a first-call kernel load
+    "Lazy Function Loading",
     "cudaModuleLoad",  # JIT load of a freshly compiled kernel
     "cuModuleLoad",
 )
@@ -98,17 +88,18 @@ def steady_state_violations(
 ) -> dict[str, list[str]]:
     """Map each matched marker to up to ``samples`` of the events that matched it.
 
-    One pass over the events, because a mapping trace of a real stage runs to
-    hundreds of MB. Each sample carries the event's category and timestamp: the
-    category says whether the match is a python stack frame or a runtime call,
-    and the timestamps say whether the one-time work sits at the start of the
-    window or recurs through it.
+    Each sample carries the event's category and timestamp: the category says
+    whether the match is a python stack frame or a runtime call, and the
+    timestamps say whether the one-time work sits at the start of the window or
+    recurs through it.
     """
     markers = _COMPILE_MARKERS if allow_capture else _COMPILE_MARKERS + _CAPTURE_MARKERS
     with gzip.open(trace_gz, "rt") as handle:
-        trace = json.load(handle)
+        events = json.load(handle)["traceEvents"]
+    if not events:
+        raise ValueError(f"{trace_gz} has no events; the profiler recorded nothing")
     hits: dict[str, list[str]] = {}
-    for event in trace.get("traceEvents", []):
+    for event in events:
         name = str(event.get("name", ""))
         for marker in markers:
             if marker not in name:
@@ -162,10 +153,21 @@ def capture(
     torch.cuda.synchronize()
 
     profiler = _torch_profiler()
-    os.environ["SGLANG_TORCH_PROFILER_WITH_STACK"] = "1" if with_stack else "0"
     run_dir = Path(output_dir) / tag
     run_dir.mkdir(parents=True, exist_ok=True)
-    trace = Path(profiler.start(str(run_dir / tag), run_id=tag))
+    # TorchProfiler reads the flag in start(); restore it so a capture inside a
+    # server process does not change what a later /start_profile records.
+    previous_with_stack = os.environ.get(_WITH_STACK_ENV)
+    os.environ[_WITH_STACK_ENV] = "1" if with_stack else "0"
+    try:
+        trace = Path(profiler.start(str(run_dir / tag), run_id=tag))
+    finally:
+        if previous_with_stack is None:
+            os.environ.pop(_WITH_STACK_ENV)
+        else:
+            os.environ[_WITH_STACK_ENV] = previous_with_stack
+    # TorchNPUProfiler returns a directory; nothing below applies to it.
+    assert trace.suffix == ".gz", f"expected a gzipped chrome trace, got {trace}"
     try:
         for _ in range(iters):
             body()

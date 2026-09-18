@@ -154,22 +154,15 @@ confident wrong answer. Warm every shape bucket until the gate passes; never
 subtract the cost afterwards.
 
 It rejects compiling and capturing, not *compiled* or *captured execution*, and
-that line is narrow. `cudaGraphLaunch` is what a healthy formal trace is full of;
-`is_torchdynamo_compiling` is a predicate every HF forward calls;
-`torch/_inductor/output_code.py` is how compiled code is *entered*; and
-inductor's `compile_worker` threads sit in a blocking read for the life of the
-process, so they appear in every trace. The markers therefore name compile-side
-subpaths only, and widening them means naming subpaths too - a gate that fails
-clean runs gets bypassed, and a bypassed gate is worse than none. Those subpaths
-are python frames, and a `formal` trace has none, so there the gate rests on
-Dynamo's timed regions - plain events with the `(dynamo_timed)` suffix, present
-with stacks on or off, covering fx-graph-cache hits as well - and on the
-profiler's first-call kernel load, `Lazy Function Loading`.
-
-A failure prints each matched event with its category and timestamp, because the
-substring alone cannot separate a stack frame from real work: timestamps at the
-window start mean one shape bucket went unwarmed, timestamps across the whole
-window mean something recompiles every call.
+that line is narrow: `cudaGraphLaunch` fills a healthy formal trace,
+`is_torchdynamo_compiling` is called by every HF forward, and
+`torch/_inductor/output_code.py` is how compiled code is *entered*. So the
+markers name compile-side subpaths only - a gate that fails clean runs gets
+bypassed, which is worse than none. Those subpaths are python frames, absent
+from a `formal` trace, so there the gate rests on Dynamo's `(dynamo_timed)`
+regions and the profiler's `Lazy Function Loading`, both plain events. A failure
+prints each match with category and timestamp: matches at the window start mean
+an unwarmed shape bucket, matches across it mean a recompile every call.
 
 **After** - accept a change on the `formal` config only. Mapping-trace deltas
 prove nothing about serving, because the graph replaces the launch path the
