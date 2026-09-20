@@ -159,10 +159,18 @@ that line is narrow: `cudaGraphLaunch` fills a healthy formal trace,
 `torch/_inductor/output_code.py` is how compiled code is *entered*. So the
 markers name compile-side subpaths only - a gate that fails clean runs gets
 bypassed, which is worse than none. Those subpaths are python frames, absent
-from a `formal` trace, so there the gate rests on Dynamo's `(dynamo_timed)`
-regions and the profiler's `Lazy Function Loading`, both plain events. A failure
+from a `formal` trace, so there the gate rests on plain events instead: Dynamo's
+`(dynamo_timed)` regions, module loads, and `Lazy Function Loading`. A failure
 prints each match with category and timestamp: matches at the window start mean
 an unwarmed shape bucket, matches across it mean a recompile every call.
+
+`Lazy Function Loading` is the one ambiguous marker: it also fires on the first
+use of an ordinary kernel, so a clean `mapping` trace can carry a few. It is
+fatal only where stacks are off, which is where nothing else would catch a cold
+compile; with stacks on, a compile matches a path marker too, so the gate prints
+the loads and the run continues. Read that note as warmup you could remove, not
+as a result to explain away. A server-captured trace gated by hand takes the
+strict reading unless you pass `with_stack=True`.
 
 **After** - accept a change on the `formal` config only. Mapping-trace deltas
 prove nothing about serving, because the graph replaces the launch path the

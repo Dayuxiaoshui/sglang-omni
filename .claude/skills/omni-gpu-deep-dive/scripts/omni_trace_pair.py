@@ -45,7 +45,7 @@ def _torch_profiler() -> type[TorchProfiler]:
 # already-compiled code, so the path markers name compile-side subpaths only.
 # Path markers are python frames and a formal trace has none; there the gate
 # rests on Dynamo's timed regions (named per torch version, always suffixed
-# ``(dynamo_timed)``) and the profiler's first-call kernel load.
+# ``(dynamo_timed)``) and on module loads.
 _COMPILE_MARKERS = (
     "(dynamo_timed)",
     "entire_frame_compile",  # torch 2.13
@@ -54,10 +54,16 @@ _COMPILE_MARKERS = (
     "torch/_inductor/compile_fx",  # inductor compile entry
     "torch/_inductor/async_compile",
     "torch/_inductor/codecache",  # codegen, and fx-graph-cache loads
-    "Lazy Function Loading",
     "cudaModuleLoad",  # JIT load of a freshly compiled kernel
     "cuModuleLoad",
 )
+# One-time work as well, but ambiguous: the profiler emits this for the first use
+# of *any* kernel, not only a freshly compiled one, so a clean mapping trace holds
+# a handful of tens-of-microsecond loads with no compile marker beside them.
+# Where stacks are on it is also redundant -- compilation matches a path marker
+# there too -- so it is reported and not fatal. A stackless trace has no path
+# markers to fall back on, so there it stays fatal.
+_FIRST_CALL_MARKERS = ("Lazy Function Loading",)
 # Capture, not replay: cudaGraphLaunch is exactly what a formal trace should be
 # full of, so it is deliberately absent here.
 _CAPTURE_MARKERS = (
@@ -92,8 +98,13 @@ def steady_state_violations(
     whether the match is a python stack frame or a runtime call, and the
     timestamps say whether the one-time work sits at the start of the window or
     recurs through it.
+
+    Every marker that matched is reported, including the ambiguous ones;
+    ``assert_steady_state`` is where they are weighed.
     """
-    markers = _COMPILE_MARKERS if allow_capture else _COMPILE_MARKERS + _CAPTURE_MARKERS
+    markers = _COMPILE_MARKERS + _FIRST_CALL_MARKERS
+    if not allow_capture:
+        markers += _CAPTURE_MARKERS
     with gzip.open(trace_gz, "rt") as handle:
         events = json.load(handle)["traceEvents"]
     if not events:
@@ -110,27 +121,53 @@ def steady_state_violations(
     return hits
 
 
+def _format_hits(hits: dict[str, list[str]]) -> str:
+    """One indented block per marker, its samples listed under it."""
+    return "\n".join(
+        f"  {marker}\n" + "\n".join(f"    {sample}" for sample in samples)
+        for marker, samples in sorted(hits.items())
+    )
+
+
 def assert_steady_state(
-    trace_gz: Path, *, tag: str, allow_capture: bool = False
+    trace_gz: Path, *, tag: str, allow_capture: bool = False, with_stack: bool = False
 ) -> None:
     """Gate: refuse a trace that recorded compilation or graph capture.
 
     A trace with either in it attributes one-time cost to steady-state kernels,
     which is the single most common way a profiling run reaches a wrong
     conclusion. Warm up until these are gone rather than subtracting them later.
+
+    ``with_stack`` states that this trace carries python stacks, which demotes
+    ``_FIRST_CALL_MARKERS`` to a printed note. It defaults to the strict reading,
+    so a trace gated by hand off the server path has to opt in.
     """
     hits = steady_state_violations(trace_gz, allow_capture=allow_capture)
-    if hits:
-        detail = "\n".join(
-            f"  {marker}\n" + "\n".join(f"    {sample}" for sample in samples)
-            for marker, samples in sorted(hits.items())
-        )
+    demoted = _FIRST_CALL_MARKERS if with_stack else ()
+
+    fatal = {
+        marker: samples for marker, samples in hits.items() if marker not in demoted
+    }
+    if fatal:
         raise RuntimeError(
-            f"[{tag}] trace is not steady state: {trace_gz}\n{detail}\n"
+            f"[{tag}] trace is not steady state: {trace_gz}\n{_format_hits(fatal)}\n"
             "Increase --warmup (and warm every shape bucket) so compile and "
             "capture finish before the profiler starts. Timestamps bunched at "
             "the window start mean one shape bucket went unwarmed; timestamps "
             "spread across it mean something recompiles every call."
+        )
+
+    # After the raise, never beside it: a note saying one marker is harmless
+    # reads as an excuse for the failure it is printed next to.
+    noted = {marker: samples for marker, samples in hits.items() if marker in demoted}
+    if noted:
+        print(
+            f"[{tag}] first-call kernel loads, not a failure here:\n"
+            f"{_format_hits(noted)}\n"
+            "  Nothing else matched, and a compile would have matched a path "
+            "marker too, so this is the first use of an ordinary kernel. Its "
+            "load cost lands on the kernel that triggered it; more warmup "
+            "removes it."
         )
 
 
@@ -178,7 +215,9 @@ def capture(
         profiler.stop(run_id=tag)
 
     await_compression(trace)
-    assert_steady_state(trace, tag=tag, allow_capture=allow_capture)
+    assert_steady_state(
+        trace, tag=tag, allow_capture=allow_capture, with_stack=with_stack
+    )
     print(f"[{tag}] trace -> {trace}")
     return run_dir
 

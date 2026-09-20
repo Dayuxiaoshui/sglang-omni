@@ -201,6 +201,48 @@ def test_gate_rejects_compilation_without_python_stacks(
         trace_pair.assert_steady_state(trace, tag="formal")
 
 
+def test_first_call_loads_are_reported_not_fatal_on_a_trace_with_stacks(
+    trace_pair: ModuleType, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``Lazy Function Loading`` also marks the first use of an ordinary kernel.
+
+    Two real CosyVoice mapping traces failed on five of these and nothing else,
+    tens of microseconds each, no compile marker beside them. With stacks on, a
+    compile would have matched a path marker too, so the marker only rejected
+    traces that were fine for location. It is still printed, being warmup the run
+    could remove, and still fatal where there are no path markers to fall back
+    on.
+    """
+    trace = _write_trace(
+        tmp_path / "mapping.trace.json.gz",
+        ["aten::mm", "Lazy Function Loading", "cudaLaunchKernel"],
+        cat="cuda_driver",
+    )
+
+    trace_pair.assert_steady_state(trace, tag="mapping", with_stack=True)
+    assert "Lazy Function Loading [cat=cuda_driver ts=1]" in capsys.readouterr().out
+
+    with pytest.raises(RuntimeError, match="not steady state"):
+        trace_pair.assert_steady_state(trace, tag="formal")
+
+
+def test_first_call_loads_do_not_excuse_compilation_on_the_same_trace(
+    trace_pair: ModuleType, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Demoting one marker must not soften the ones beside it, in the failure or
+    in what the run prints: a note calling a load harmless, printed next to a
+    compile that failed the gate, reads as an excuse for it."""
+    trace = _write_trace(
+        tmp_path / "mapping.trace.json.gz",
+        ["Lazy Function Loading", "torch/_inductor/compile_fx.py(1500): compile_fx"],
+    )
+    with pytest.raises(RuntimeError, match="not steady state") as excinfo:
+        trace_pair.assert_steady_state(trace, tag="mapping", with_stack=True)
+
+    assert "Lazy Function Loading" not in str(excinfo.value)
+    assert capsys.readouterr().out == ""
+
+
 def test_gate_failure_reports_bounded_samples_with_category_and_timestamp(
     trace_pair: ModuleType, tmp_path: Path
 ) -> None:
@@ -303,6 +345,42 @@ def test_capture_restores_the_with_stack_env_var(
 
     assert fake_profiler.seen_with_stack == ["0"]
     assert os.environ[_WITH_STACK] == "1"
+
+
+def test_capture_wires_with_stack_into_the_gate(
+    trace_pair: ModuleType,
+    tmp_path: Path,
+    fake_profiler: _FakeProfiler,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``capture_pair`` records mapping first, so a first-call load treated as
+    fatal there ended the run before formal was ever captured."""
+
+    def start(trace_path_template: str, run_id: str | None = None) -> str:
+        gz_path = Path(f"{trace_path_template}_rank0.trace.json.gz")
+        _write_trace(gz_path, ["Lazy Function Loading", "cudaLaunchKernel"])
+        return str(gz_path)
+
+    monkeypatch.setattr(fake_profiler, "start", start)
+
+    trace_pair.capture(
+        output_dir=tmp_path,
+        tag="mapping",
+        body=lambda: None,
+        iters=1,
+        warmup=0,
+        with_stack=True,
+    )
+
+    with pytest.raises(RuntimeError, match="not steady state"):
+        trace_pair.capture(
+            output_dir=tmp_path,
+            tag="formal",
+            body=lambda: None,
+            iters=1,
+            warmup=0,
+            with_stack=False,
+        )
 
 
 def test_capture_stops_the_profiler_when_the_body_raises(
