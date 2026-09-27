@@ -120,6 +120,48 @@ def test_native_vocoder_batch_matches_single_request_shapes(
     assert all(np.isfinite(wave).all() for wave in (*batched, single_a, single_b))
 
 
+@pytest.fixture(scope="module")
+def compiled_vocoder() -> MiniCPMOCode2Wav:
+    checkpoint = checkpoint_dir()
+    device = resolve_concrete_device(None)
+    if checkpoint is None or device.type != "cuda":
+        pytest.skip("Set MINICPMO_CHECKPOINT and provide CUDA for compiled flow checks")
+    else:
+        pass
+    return MiniCPMOCode2Wav(
+        str(checkpoint), device=str(device), dtype="float16", compile_flow=True
+    )
+
+
+@pytest.mark.accelerator
+def test_compiled_flow_serves_new_batches_without_recompiling(
+    compiled_vocoder: MiniCPMOCode2Wav,
+) -> None:
+    tokens = [1498, 1734, 3732, 3726, 3645]
+    sequences = [tokens * 3, tokens, *([tokens * 7] * 5)]
+    with torch.compiler.set_stance("fail_on_recompile"):
+        waveforms = compiled_vocoder.vocode(sequences[:2], None)
+        waveforms += compiled_vocoder.vocode(sequences[2:], None)
+    assert [wave.shape for wave in waveforms] == [
+        (len(sequence) * SAMPLES_PER_CODEC_TOKEN,) for sequence in sequences
+    ]
+    assert all(np.isfinite(wave).all() for wave in waveforms)
+
+
+@pytest.mark.accelerator
+def test_compiled_flow_matches_eager(compiled_vocoder: MiniCPMOCode2Wav) -> None:
+    device = compiled_vocoder.token2wav.device
+    tokens = torch.tensor(
+        [[1498, 1734, 3732, 3726, 3645] * 7], dtype=torch.int32, device=device
+    )
+    token_lens = torch.tensor([tokens.shape[1]], dtype=torch.int32, device=device)
+    prompt = compiled_vocoder.speaker_prompt(None)
+    compiled = compiled_vocoder.flow_mel(tokens, token_lens, prompt).float()
+    with torch.compiler.set_stance("force_eager"):
+        eager = compiled_vocoder.flow_mel(tokens, token_lens, prompt).float()
+    assert (compiled - eager).norm() / eager.norm() < 5e-3
+
+
 def data_uri(audio: bytes) -> str:
     return "data:audio/wav;base64," + base64.b64encode(audio).decode("ascii")
 
@@ -173,6 +215,13 @@ def test_speech_pipeline_enables_code2wav_batching_by_default() -> None:
     assert code2wav.factory.max_batch_size == 8
     assert code2wav.factory.max_batch_wait_ms == 0.0
     assert code2wav.factory.batch_wait_when_idle is False
+
+
+def test_speech_pipeline_compiles_fp16_code2wav_flow_by_default() -> None:
+    config = MiniCPMOSpeechPipelineConfig(model_path="unused")
+    code2wav = next(stage for stage in config.stages if stage.name == "code2wav")
+    assert code2wav.factory.dtype == "float16"
+    assert code2wav.factory.compile_flow is True
 
 
 def test_vocode_slices_waveforms_to_token_lengths() -> None:

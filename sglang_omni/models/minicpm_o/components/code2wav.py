@@ -22,6 +22,7 @@ FLOW_DTYPES = (torch.float32, torch.float16, torch.bfloat16)
 OUTPUT_SAMPLE_RATE = 24000
 CODEC_TOKEN_RATE = 25
 SAMPLES_PER_CODEC_TOKEN = OUTPUT_SAMPLE_RATE // CODEC_TOKEN_RATE
+FLOW_WARMUP_TOKENS = 32
 
 
 class MiniCPMOCode2Wav(nn.Module):
@@ -35,6 +36,7 @@ class MiniCPMOCode2Wav(nn.Module):
         dtype: str | torch.dtype | None = None,
         n_timesteps: int = 10,
         prompt_wav: str | None = None,
+        compile_flow: bool = False,
     ) -> None:
         super().__init__()
         from sglang_omni.models.minicpm_o.components.token2wav.vocoder import Token2Wav
@@ -81,6 +83,30 @@ class MiniCPMOCode2Wav(nn.Module):
         self.prompt_cache_key: str | None = None
         self.sample_rate = OUTPUT_SAMPLE_RATE
         self.eval()
+        if compile_flow:
+            flow = self.token2wav.flow
+            estimator = flow.decoder.estimator
+            estimator.forward = torch.compile(estimator.forward, dynamic=True)
+            # note (Dayuxiaoshui): warm up through flow inference so the trace
+            # sees its mixed autocast dtypes; dynamic shapes cover later batches.
+            warmup_tokens = torch.zeros(
+                1, FLOW_WARMUP_TOKENS, dtype=torch.int32, device=dev
+            )
+            warmup_token_lens = torch.tensor(
+                [FLOW_WARMUP_TOKENS], dtype=torch.int32, device=dev
+            )
+            warmup_prompt = (
+                warmup_tokens,
+                warmup_token_lens,
+                torch.zeros(1, flow.spk_embed_affine_layer.in_features, device=dev),
+                torch.zeros(
+                    1, FLOW_WARMUP_TOKENS * flow.up_rate, flow.output_size, device=dev
+                ),
+            )
+            with self.device_context:
+                self.flow_mel(warmup_tokens, warmup_token_lens, warmup_prompt)
+        else:
+            pass
 
     @torch.inference_mode()
     def forward(
@@ -136,6 +162,35 @@ class MiniCPMOCode2Wav(nn.Module):
             pass
         return self.token2wav.cache
 
+    def flow_mel(
+        self,
+        speech_tokens: torch.Tensor,
+        speech_tokens_lens: torch.Tensor,
+        prompt: tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor],
+    ) -> torch.Tensor:
+        """Run the flow on padded codec tokens behind one speaker prompt."""
+        (
+            prompt_speech_tokens,
+            prompt_speech_tokens_lens,
+            speaker_embedding,
+            prompt_mels,
+        ) = prompt
+        batch_size = speech_tokens.shape[0]
+        with torch.amp.autocast(
+            self.token2wav.device.type,
+            dtype=self.token2wav.dtype,
+            enabled=self.token2wav.dtype != torch.float32,
+        ):
+            return self.token2wav.flow.inference(
+                speech_tokens,
+                speech_tokens_lens,
+                prompt_speech_tokens.expand(batch_size, -1).contiguous(),
+                prompt_speech_tokens_lens.expand(batch_size).contiguous(),
+                prompt_mels.expand(batch_size, -1, -1).contiguous(),
+                speaker_embedding.expand(batch_size, -1).contiguous(),
+                self.token2wav.n_timesteps,
+            )
+
     def vocode(
         self,
         token_sequences: Sequence[Sequence[int]],
@@ -147,12 +202,6 @@ class MiniCPMOCode2Wav(nn.Module):
         elif any(len(tokens) == 0 for tokens in token_sequences):
             raise ValueError("codec token sequences must be non-empty")
         else:
-            (
-                prompt_speech_tokens,
-                prompt_speech_tokens_lens,
-                speaker_embedding,
-                prompt_mels,
-            ) = self.speaker_prompt(prompt_wav)
             batch_size = len(token_sequences)
             token_lens = [len(tokens) for tokens in token_sequences]
             speech_tokens = pad_sequence(
@@ -167,28 +216,9 @@ class MiniCPMOCode2Wav(nn.Module):
             speech_tokens_lens = torch.tensor(
                 token_lens, dtype=torch.int32, device=self.token2wav.device
             )
-            prompt_speech_tokens = prompt_speech_tokens.expand(
-                batch_size, -1
-            ).contiguous()
-            prompt_speech_tokens_lens = prompt_speech_tokens_lens.expand(
-                batch_size
-            ).contiguous()
-            speaker_embedding = speaker_embedding.expand(batch_size, -1).contiguous()
-            prompt_mels = prompt_mels.expand(batch_size, -1, -1).contiguous()
-            with torch.amp.autocast(
-                self.token2wav.device.type,
-                dtype=self.token2wav.dtype,
-                enabled=self.token2wav.dtype != torch.float32,
-            ):
-                mel = self.token2wav.flow.inference(
-                    speech_tokens,
-                    speech_tokens_lens,
-                    prompt_speech_tokens,
-                    prompt_speech_tokens_lens,
-                    prompt_mels,
-                    speaker_embedding,
-                    self.token2wav.n_timesteps,
-                )
+            mel = self.flow_mel(
+                speech_tokens, speech_tokens_lens, self.speaker_prompt(prompt_wav)
+            )
             length_groups: dict[int, list[int]] = defaultdict(list)
             for idx, token_len in enumerate(token_lens):
                 length_groups[token_len * self.token2wav.flow.up_rate].append(idx)
