@@ -25,10 +25,7 @@ from sglang_omni.models.minicpm_o.routing import (
     code2wav_reference_audio,
     project_talker_to_code2wav,
 )
-from sglang_omni.models.minicpm_o.stages import (
-    create_code2wav_executor,
-    vocode_code2wav_payloads,
-)
+from sglang_omni.models.minicpm_o.stages import vocode_code2wav_payloads
 from sglang_omni.proto import OmniRequest, StagePayload
 from sglang_omni.utils.device import resolve_concrete_device
 
@@ -223,42 +220,16 @@ def test_speech_pipeline_enables_code2wav_batching_by_default() -> None:
     assert code2wav.factory.batch_wait_when_idle is False
 
 
-def test_speech_pipeline_runs_code2wav_flow_in_fp16_by_default() -> None:
+def test_speech_pipeline_compiles_fp16_code2wav_flow_by_default() -> None:
     config = MiniCPMOSpeechPipelineConfig(model_path="unused")
     code2wav = next(stage for stage in config.stages if stage.name == "code2wav")
     assert code2wav.factory.dtype == "float16"
-    assert "enable_dit_torch_compile" not in code2wav.factory.model_extra
+    assert code2wav.factory.enable_dit_torch_compile is True
 
 
-@pytest.mark.parametrize(
-    ("device", "enable_dit_torch_compile", "expected_compile"),
-    [
-        ("cuda:0", None, True),
-        ("xpu:0", None, False),
-        ("xpu:0", True, True),
-        ("cuda:0", False, False),
-    ],
-)
-def test_code2wav_executor_compiles_dit_by_default_only_on_cuda(
-    monkeypatch: pytest.MonkeyPatch,
-    device: str,
-    enable_dit_torch_compile: bool | None,
-    expected_compile: bool,
-) -> None:
-    code2wav_class = MagicMock()
-    monkeypatch.setattr(
-        "sglang_omni.models.minicpm_o.stages.MiniCPMOCode2Wav", code2wav_class
-    )
-    monkeypatch.setattr(
-        "sglang_omni.models.minicpm_o.stages.resolve_concrete_device",
-        lambda device_spec, gpu_id: torch.device(device),
-    )
-    create_code2wav_executor(
-        "unused", enable_dit_torch_compile=enable_dit_torch_compile
-    )
-    code2wav_kwargs = code2wav_class.call_args.kwargs
-    assert code2wav_kwargs["device"] == device
-    assert code2wav_kwargs["enable_dit_torch_compile"] is expected_compile
+def test_dit_torch_compile_rejects_non_cuda_device() -> None:
+    with pytest.raises(ValueError, match="CUDA only"):
+        MiniCPMOCode2Wav("unused", device="xpu:0", enable_dit_torch_compile=True)
 
 
 def test_vocode_slices_waveforms_to_token_lengths() -> None:
