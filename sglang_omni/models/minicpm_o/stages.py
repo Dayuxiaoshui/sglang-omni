@@ -227,13 +227,19 @@ def create_code2wav_executor(
     batch_wait_when_idle: bool = False,
     dtype: str | None = None,
     max_batch_cost: int | None = None,
-    compile_flow: bool,
+    enable_dit_torch_compile: bool | None = None,
 ) -> SimpleScheduler:
+    concrete_device = resolve_concrete_device(device, gpu_id)
+    if enable_dit_torch_compile is None:
+        # note (Dayuxiaoshui): the compiled DiT is validated on CUDA only.
+        enable_dit_torch_compile = concrete_device.type == "cuda"
+    else:
+        pass
     model = MiniCPMOCode2Wav(
         model_path,
-        device=str(resolve_concrete_device(device, gpu_id)),
+        device=str(concrete_device),
         dtype=dtype,
-        compile_flow=compile_flow,
+        enable_dit_torch_compile=enable_dit_torch_compile,
     )
 
     def codec_token_cost(payload: StagePayload) -> int:

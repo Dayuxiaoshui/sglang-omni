@@ -36,7 +36,7 @@ class MiniCPMOCode2Wav(nn.Module):
         dtype: str | torch.dtype | None = None,
         n_timesteps: int = 10,
         prompt_wav: str | None = None,
-        compile_flow: bool = False,
+        enable_dit_torch_compile: bool = False,
     ) -> None:
         super().__init__()
         from sglang_omni.models.minicpm_o.components.token2wav.vocoder import Token2Wav
@@ -83,12 +83,12 @@ class MiniCPMOCode2Wav(nn.Module):
         self.prompt_cache_key: str | None = None
         self.sample_rate = OUTPUT_SAMPLE_RATE
         self.eval()
-        if compile_flow:
+        if enable_dit_torch_compile:
             flow = self.token2wav.flow
             estimator = flow.decoder.estimator
             estimator.forward = torch.compile(estimator.forward, dynamic=True)
-            # note (Dayuxiaoshui): warm up through flow inference so the trace
-            # sees its mixed autocast dtypes; dynamic shapes cover later batches.
+            # note (Dayuxiaoshui): trace through flow inference at startup so the
+            # graph sees serving's autocast dtypes and no request pays the compile.
             warmup_tokens = torch.zeros(
                 1, FLOW_WARMUP_TOKENS, dtype=torch.int32, device=dev
             )

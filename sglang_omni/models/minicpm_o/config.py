@@ -121,7 +121,6 @@ def code2wav_stage(*, gpu: int, process: str) -> StageConfig:
             # note (Dayuxiaoshui): flow activations fit the FP16 range, whose
             # wider mantissa keeps the mel closer to FP32 than BF16 does.
             dtype="float16",
-            compile_flow=True,
         ),
         # Note (Chenyang): As a general comment and my usual understanding
         # of SGLang Omni, SGLang Omni has a poor runtime which leads to a
