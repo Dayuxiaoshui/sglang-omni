@@ -13,6 +13,7 @@ import pytest
 from huggingface_hub.errors import LocalEntryNotFoundError, RepositoryNotFoundError
 
 import sglang_omni.platforms as platforms
+from sglang_omni.config.runtime import resolve_stage_typed_kwargs
 from sglang_omni.utils.imports import import_string
 
 MODELS_DIR = Path(importlib.import_module("sglang_omni.models").__file__).parent
@@ -196,7 +197,8 @@ def test_gpu_stage_factories_forward_gpu_id_into_device_spec_resolution(
     monkeypatch.setenv("HF_HUB_OFFLINE", "1")
     monkeypatch.setenv("TRANSFORMERS_OFFLINE", "1")
     arm_device_spec_resolvers(monkeypatch, factory_path=stage.factory_path)
-    kwargs: dict[str, object] = {"device": None, "gpu_id": 2}
+    kwargs = resolve_stage_typed_kwargs(stage)
+    kwargs.update(device=None, gpu_id=2)
     if "model_path" in factory_parameters(stage.factory_path):
         kwargs["model_path"] = "unused"
     try:
