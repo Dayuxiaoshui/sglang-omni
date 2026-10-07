@@ -64,7 +64,8 @@ public:
         options.chunk_duration_seconds <= 0 ||
         !std::isfinite(options.min_chunk_duration_seconds) ||
         options.min_chunk_duration_seconds < 0) {
-      throw std::invalid_argument("chunk durations must be finite and nonnegative");
+      throw std::invalid_argument(
+          "chunk durations must be finite and nonnegative");
     }
     const std::optional<std::string> vad_directory =
         asr_service::TextField(form, "vad_model_directory");
@@ -91,7 +92,8 @@ public:
           segments.merge_gap_seconds < 0 ||
           !std::isfinite(segments.max_chunk_seconds) ||
           segments.max_chunk_seconds <= 0) {
-        throw std::invalid_argument("VAD settings must be finite and nonnegative");
+        throw std::invalid_argument(
+            "VAD settings must be finite and nonnegative");
       }
     } else {
     }
