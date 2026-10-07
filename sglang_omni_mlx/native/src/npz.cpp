@@ -140,9 +140,9 @@ Load(const std::filesystem::path &path) {
         ReadLittleEndian<uint32_t>(directory, entry_offset + 42);
     const uint16_t name_length =
         ReadLittleEndian<uint16_t>(directory, entry_offset + 28);
-    const std::string name(
-        directory.data() + entry_offset + kCentralDirectoryEntrySize,
-        name_length);
+    const std::string name(directory.data() + entry_offset +
+                               kCentralDirectoryEntrySize,
+                           name_length);
     // A ZIP64 extra field holds, in order, only the values deferred to it:
     // the uncompressed size, the compressed size, then the offset.
     size_t extra_field_offset =
@@ -168,7 +168,8 @@ Load(const std::filesystem::path &path) {
           value_offset += 8;
         } else {
         }
-        local_header_offset = ReadLittleEndian<uint64_t>(directory, value_offset);
+        local_header_offset =
+            ReadLittleEndian<uint64_t>(directory, value_offset);
       } else {
       }
       extra_field_offset += 4 + field_size;
@@ -182,10 +183,9 @@ Load(const std::filesystem::path &path) {
       throw std::runtime_error(path.string() + " has a corrupt member " + name);
     } else {
     }
-    const size_t member_offset =
-        local_header_offset + kLocalFileHeaderSize +
-        ReadLittleEndian<uint16_t>(local_header, 26) +
-        ReadLittleEndian<uint16_t>(local_header, 28);
+    const size_t member_offset = local_header_offset + kLocalFileHeaderSize +
+                                 ReadLittleEndian<uint16_t>(local_header, 26) +
+                                 ReadLittleEndian<uint16_t>(local_header, 28);
     arrays.insert_or_assign(
         name.ends_with(".npy") ? name.substr(0, name.size() - 4) : name,
         mx::load(std::make_shared<ZipMemberReader>(
