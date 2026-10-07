@@ -25,6 +25,7 @@ pytestmark = pytest.mark.skipif(
     not RUNTIME_BIN or not DATA_ROOT, reason="set NATIVE_RUNTIME_BIN and CI_DATA_ROOT"
 )
 WHISPER_REPO = "mlx-community/whisper-large-v3-turbo"
+WHISPER_LARGE_V3_REPO = "mlx-community/whisper-large-v3-mlx"
 
 
 class ModelServer(Server):
@@ -91,6 +92,18 @@ def test_whisper_plain_request_returns_json_text(whisper_server: ModelServer) ->
         200,
         {"text": "互联网结合了大众传播和人际传播的要素"},
     )
+
+
+def test_whisper_large_v3_server_transcribes() -> None:
+    server = ModelServer("whisper_server", "whisper", WHISPER_LARGE_V3_REPO)
+    try:
+        status, body = server.post_form(
+            {"language": "en", "max_new_tokens": "128"}, clip("0006_en_short")
+        )
+        assert status == 200
+        assert json.loads(body)["text"].strip()
+    finally:
+        server.stop()
 
 
 @pytest.mark.parametrize(
