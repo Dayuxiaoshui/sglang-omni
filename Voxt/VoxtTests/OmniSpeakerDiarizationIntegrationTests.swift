@@ -159,6 +159,35 @@ final class OmniSpeakerDiarizationIntegrationTests: XCTestCase {
         XCTAssertLessThanOrEqual(Double(flipped), maxFlippedDecisions * Double(decisions))
     }
 
+    /// A server that dies costs the live engine one failed session; the next
+    /// session starts a new server.
+    func testLiveEngineRecoversAfterTheServerDies() async throws {
+        let samples = Array(try clip().prefix(16_000 * 10))
+        let engine = SortformerMeetingSpeakerDiarizationEngine()
+        let asset = MeetingAudioAsset(source: .systemAudio, samples: samples, sampleRate: 16_000, sessionStartOffset: 0)
+        let descriptors = [MeetingAudioAssetDescriptor(source: .systemAudio, sampleRate: 16_000,
+                                                       startSample: 0, sampleCount: samples.count)]
+        _ = try await engine.diarizeSession(descriptors: descriptors, loadAsset: { _ in asset }, continuousAudioURL: nil, options: .init(), progress: nil)
+
+        let kill = Process()
+        kill.executableURL = URL(fileURLWithPath: "/usr/bin/pkill")
+        kill.arguments = ["-KILL", "-f", "model-kind sortformer"]
+        try kill.run()
+        kill.waitUntilExit()
+        XCTAssertEqual(kill.terminationStatus, 0)
+
+        var recovered = false
+        for _ in 0 ..< 5 {
+            if (try? await engine.diarizeSession(descriptors: descriptors, loadAsset: { _ in asset }, continuousAudioURL: nil, options: .init(), progress: nil)) != nil {
+                recovered = true
+                break
+            } else {
+                try await Task.sleep(for: .milliseconds(100))
+            }
+        }
+        XCTAssertTrue(recovered)
+    }
+
     /// The meeting engine, routed to the runtime, finds the same speaker turns
     /// as the Swift engine's feeds.
     func testEngineTurnsMatchMLXAudioVAD() async throws {

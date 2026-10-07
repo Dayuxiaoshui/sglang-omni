@@ -14,6 +14,7 @@ import http.client
 import json
 import os
 import subprocess
+import time
 import wave
 from collections.abc import Iterator
 from pathlib import Path
@@ -249,7 +250,18 @@ def test_stream_matches_the_original(server: Server) -> None:
         assert reply["state"]["frames_processed"] == processed
         assert reply["state"]["fifo_length"] <= FEED["fifo_max"]
         assert reply["state"]["spkcache_length"] <= FEED["spkcache_max"]
-    assert server.health()["request_states"]["streams"] == 0
+    assert wait_for_no_streams(server)
+
+
+def wait_for_no_streams(server: Server) -> bool:
+    """The server counts a stream closed once its close handler has run."""
+    deadline = time.monotonic() + 2
+    while server.health()["request_states"]["streams"] != 0:
+        if time.monotonic() > deadline:
+            return False
+        else:
+            time.sleep(0.02)
+    return True
 
 
 def test_streams_keep_separate_state(server: Server) -> None:
@@ -331,8 +343,17 @@ def test_invalid_options_are_refused(server: Server, query: str) -> None:
             socket.recv(timeout=30)
 
 
-@pytest.mark.parametrize("payload", [b"\x00\x00\x00", b"\x00\x00\x00\x00"])
-def test_a_malformed_feed_closes_the_stream(server: Server, payload: bytes) -> None:
+@pytest.mark.parametrize(
+    "payload",
+    [
+        b"\x00\x00\x00",
+        b"\x00\x00\x00\x00",
+        "text audio",
+        np.array([0.0, np.nan], dtype="<f4").tobytes(),
+        np.zeros(480_001, dtype="<f4").tobytes(),
+    ],
+)
+def test_a_malformed_feed_closes_the_stream(server: Server, payload) -> None:
     with server.stream() as socket:
         socket.send(payload)
         assert "error" in json.loads(socket.recv(timeout=30))
