@@ -41,6 +41,7 @@ final class OmniASRRuntimeLaunchTests: XCTestCase {
         )
         XCTAssertEqual(OmniASRBackend.modelKindsByRepo["mlx-community/whisper-large-v3-turbo"], .whisper)
         XCTAssertEqual(OmniASRBackend.modelKindsByRepo["mlx-community/whisper-large-v3-mlx"], .whisper)
+        XCTAssertEqual(OmniASRBackend.modelKindsByRepo["mlx-community/whisper-small-mlx"], .whisper)
     }
 
     /// The runtime binary is started directly in supervised mode, not through Python.
