@@ -146,10 +146,12 @@ jobs:
       - name: Other models' golden outputs on the frozen corpus
         if: ${{ always() }}
         run: |
+          result=0
           for golden in sglang_omni_mlx/native/ci/model_golden/*.json; do
             "$VOXT_CI_ROOT/venv/bin/python" sglang_omni_mlx/native/ci/check_model_golden.py \
-              --runtime-bin "$RUNNER_TEMP/runtime/bin" --data-root "$VOXT_CI_ROOT/data" --golden "$golden"
+              --runtime-bin "$RUNNER_TEMP/runtime/bin" --data-root "$VOXT_CI_ROOT/data" --golden "$golden" || result=1
           done
+          exit "$result"
 
       - name: Other model servers' API tests
         if: ${{ always() }}
