@@ -26,6 +26,7 @@ nonisolated enum OmniASRBackend {
     static let modelKindsByRepo: [String: OmniASRModelKind] = [
         "mlx-community/Qwen3-ASR-0.6B-4bit": .qwen3ASR,
         "mlx-community/whisper-large-v3-turbo": .whisper,
+        "mlx-community/whisper-large-v3-mlx": .whisper,
     ]
 
     static let launchSettings: LaunchSettings? = LaunchSettings(environment: ProcessInfo.processInfo.environment)
