@@ -114,7 +114,9 @@ def main() -> None:
         if baseline_pending
         else []
     )
-    lines.extend(["| | Original Voxt (Swift) | Native runtime | Δ |", "|---|---|---|---|"])
+    lines.extend(
+        ["| | Original Voxt (Swift) | Native runtime | Δ |", "|---|---|---|---|"]
+    )
     for name, value in metrics.items():
         if baseline_pending:
             lines.append(f"| {name} | pending | {value:.2%} | n/a |")
