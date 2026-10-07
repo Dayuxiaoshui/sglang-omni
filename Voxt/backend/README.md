@@ -1,12 +1,13 @@
 # Voxt on sglang-omni's native MLX runtime
 
-Voxt's local Qwen3-ASR 0.6B 4-bit runs on sglang-omni's native runtime
-(`sglang_omni_mlx/native`): one C++ binary on MLX, with no Python. Voxt starts
-it and owns it. Every other model keeps Voxt's original Swift backend.
+Voxt can run selected local ASR checkpoints on sglang-omni's native runtime
+(`sglang_omni_mlx/native`): C++ binaries on MLX, with no Python runtime. Voxt
+starts and owns the selected server. Other models keep their Swift backend.
 
 | Checkpoint | Runtime | Voxt behavior kept |
 | --- | --- | --- |
 | `mlx-community/Qwen3-ASR-0.6B-4bit` | `qwen3_asr_server` | Final with context bias and language hint, Swift's audio layout and stop rules, 1200 s energy-cut chunks sharing one token budget, first detected language carried forward; live preview over the realtime socket, first decode after 100 ms of audio, then once a second |
+| `mlx-community/whisper-large-v3-turbo` | `whisper_server` | Final and batch preview with Voxt's language, token budget, temperature, and 30 s audio windows |
 
 ## Build and run
 
@@ -19,8 +20,8 @@ Voxt/backend/run_omni_dev.sh run
 
 `build` builds the runtime into `Voxt/build/omni-runtime` with
 `sglang_omni_mlx/native/scripts/build_runtime.sh`, then builds "Voxt Omni Dev".
-`bin/` holds `qwen3_asr_server`, `qwen3_asr_transcribe`, and the pinned MLX
-library and Metal kernels next to them.
+`bin/` holds `qwen3_asr_server`, `qwen3_asr_transcribe`, `whisper_server`,
+`whisper_transcribe`, and the pinned MLX library and Metal kernels next to them.
 
 "Voxt Omni Dev" has its own bundle identifier. It runs without the sandbox so it
 can start the runtime, and it sees `~/.voxt-omni-dev` as its home, so its
@@ -30,7 +31,7 @@ downloaded weights. `run_omni_dev.sh run --swift-backend` runs the same build on
 the original Swift backend for comparison.
 
 With the Omni backend enabled (`VOXT_ASR_BACKEND=omni`, `VOXT_OMNI_RUNTIME=<binary>`),
-selecting Qwen3-ASR 0.6B 4-bit starts the runtime on a free loopback port.
+selecting a listed checkpoint starts its runtime on a free loopback port.
 Switching models, idle unload, deletion and quitting stop it, and a runtime
 that dies is replaced on the next use.
 
@@ -57,6 +58,7 @@ that dies is replaced on the next use.
   - `provision.py` fetches the pinned checkpoint and rebuilds the frozen corpus from its public sources, checking every file's SHA-256.
   - `check_golden.py` runs the runtime over the 392-clip corpus with Voxt's Final request and requires every clip to match the golden output. It reports error rates next to the original Swift backend's.
 - The `Voxt Mac CI` workflow runs these on the repository's Apple Silicon runner, together with the server API tests and Voxt's Omni unit tests.
+- The Whisper check pins its checkpoint and tokenizer, compares all 392 frozen clips with its native golden, and tests the transcription server. Its Swift baseline and performance comparison must be recorded separately before release.
 - Voxt's opt-in suites need the installed model and `VOXT_RUN_MODEL_TESTS=1`:
   - `OmniPhase1LifecycleTests`:
     - load/Final/unload rounds that must leave no process behind;
@@ -74,6 +76,7 @@ the `.xctestrun` file.
 ## Known limitations
 
 - Greedy decoding only.
+- Whisper uses batch preview; its server has no realtime socket.
 - The dev build is ad hoc signed without keychain access groups, so remote
   provider API keys may not persist in it.
 - The server accepts requests from any local client on its loopback port; it

@@ -102,19 +102,27 @@ def main() -> None:
     mismatches = [
         clip_id for clip_id in manifest if results[clip_id] != golden["clips"][clip_id]
     ]
+    baseline_pending = golden["baseline"]["source"] == "pending"
     lines = [
         f"### {golden['model']}",
         "",
         f"Golden clips identical: {len(manifest) - len(mismatches)}/{len(manifest)}",
         "",
-        "| | Original Voxt (Swift) | Native runtime | Δ |",
-        "|---|---|---|---|",
     ]
+    lines.extend(
+        ["Swift baseline pending; native metrics are shown without a parity delta.", ""]
+        if baseline_pending
+        else []
+    )
+    lines.extend(["| | Original Voxt (Swift) | Native runtime | Δ |", "|---|---|---|---|"])
     for name, value in metrics.items():
-        baseline = golden["baseline"][name]
-        lines.append(
-            f"| {name} | {baseline:.2%} | {value:.2%} | {(value - baseline) * 100:+.2f} pp |"
-        )
+        if baseline_pending:
+            lines.append(f"| {name} | pending | {value:.2%} | n/a |")
+        else:
+            baseline = golden["baseline"][name]
+            lines.append(
+                f"| {name} | {baseline:.2%} | {value:.2%} | {(value - baseline) * 100:+.2f} pp |"
+            )
     for clip_id in mismatches[:10]:
         lines.append(f"\n- `{clip_id}` differs from its golden output")
     report = "\n".join(lines) + "\n"
