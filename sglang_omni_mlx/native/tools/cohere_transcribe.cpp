@@ -11,12 +11,14 @@
 #include <chrono>
 #include <fstream>
 #include <iostream>
+#include <set>
 #include <sstream>
 #include <string>
 #include <vector>
 
 #include "audio.h"
 #include "cohere_transcriber.h"
+#include "form.h"
 #include "nlohmann/json.hpp"
 #include "speech_segments.h"
 
@@ -24,16 +26,22 @@ int main(int argc, char **argv) {
   std::string model_path;
   std::string vad_model_directory;
   cohere_transcribe::CohereOptions options;
+  std::set<std::string> vad_flags;
   std::vector<std::string> files;
   for (int i = 1; i < argc; ++i) {
     const std::string argument = argv[i];
+    if (argument.rfind("--", 0) == 0 &&
+        (i + 1 >= argc || std::string(argv[i + 1]).rfind("--", 0) == 0)) {
+      std::cerr << argv[0] << ": missing value for " << argument << "\n";
+      return 2;
+    }
     const auto value = [&]() { return std::string(argv[++i]); };
     if (argument == "--model-path") {
       model_path = value();
     } else if (argument == "--language") {
       options.language = value();
     } else if (argument == "--use-punctuation") {
-      options.use_punctuation = value() != "0";
+      options.use_punctuation = qwen3_asr::FormFlag(value());
     } else if (argument == "--max-new-tokens") {
       options.max_new_tokens = std::stoi(value());
     } else if (argument == "--temperature") {
@@ -45,16 +53,22 @@ int main(int argc, char **argv) {
     } else if (argument == "--vad-model-directory") {
       vad_model_directory = value();
     } else if (argument == "--vad-threshold") {
+      vad_flags.insert(argument);
       options.speech_segments.threshold = std::stof(value());
     } else if (argument == "--vad-min-speech-ms") {
+      vad_flags.insert(argument);
       options.speech_segments.min_speech_milliseconds = std::stoi(value());
     } else if (argument == "--vad-min-silence-ms") {
+      vad_flags.insert(argument);
       options.speech_segments.min_silence_milliseconds = std::stoi(value());
     } else if (argument == "--vad-speech-pad-ms") {
+      vad_flags.insert(argument);
       options.speech_segments.speech_pad_milliseconds = std::stoi(value());
     } else if (argument == "--vad-merge-gap-seconds") {
+      vad_flags.insert(argument);
       options.speech_segments.merge_gap_seconds = std::stof(value());
     } else if (argument == "--vad-max-chunk-seconds") {
+      vad_flags.insert(argument);
       options.speech_segments.max_chunk_seconds = std::stof(value());
     } else if (argument.rfind("--", 0) == 0) {
       std::cerr << argv[0] << ": unknown option " << argument << "\n";
@@ -62,6 +76,10 @@ int main(int argc, char **argv) {
     } else {
       files.push_back(argument);
     }
+  }
+  if (!vad_model_directory.empty() && vad_flags.size() != 6) {
+    std::cerr << argv[0] << ": all six --vad-* settings are required\n";
+    return 2;
   }
   const auto load_started = std::chrono::steady_clock::now();
   const cohere_transcribe::CohereTranscriber transcriber(model_path);

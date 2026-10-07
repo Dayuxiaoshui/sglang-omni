@@ -14,6 +14,7 @@
 // vad_model_directory (a Silero VAD checkpoint), long audio is cut at speech
 // by vad_threshold, vad_min_speech_ms, vad_min_silence_ms, vad_speech_pad_ms,
 // vad_merge_gap_seconds and vad_max_chunk_seconds, all required then.
+#include <cmath>
 #include <map>
 #include <stdexcept>
 
@@ -59,6 +60,12 @@ public:
     options.min_chunk_duration_seconds =
         asr_service::NumberField(form, "min_chunk_duration")
             .value_or(options.min_chunk_duration_seconds);
+    if (!std::isfinite(options.chunk_duration_seconds) ||
+        options.chunk_duration_seconds <= 0 ||
+        !std::isfinite(options.min_chunk_duration_seconds) ||
+        options.min_chunk_duration_seconds < 0) {
+      throw std::invalid_argument("chunk durations must be finite and nonnegative");
+    }
     const std::optional<std::string> vad_directory =
         asr_service::TextField(form, "vad_model_directory");
     if (vad_directory.has_value()) {
@@ -75,6 +82,17 @@ public:
                    "vad_merge_gap_seconds"),
           Required(asr_service::NumberField(form, "vad_max_chunk_seconds"),
                    "vad_max_chunk_seconds")};
+      const auto &segments = options.speech_segments;
+      if (!std::isfinite(segments.threshold) || segments.threshold < 0 ||
+          segments.threshold > 1 || segments.min_speech_milliseconds < 0 ||
+          segments.min_silence_milliseconds < 0 ||
+          segments.speech_pad_milliseconds < 0 ||
+          !std::isfinite(segments.merge_gap_seconds) ||
+          segments.merge_gap_seconds < 0 ||
+          !std::isfinite(segments.max_chunk_seconds) ||
+          segments.max_chunk_seconds <= 0) {
+        throw std::invalid_argument("VAD settings must be finite and nonnegative");
+      }
     } else {
     }
     return [this, samples = std::move(samples), options,
