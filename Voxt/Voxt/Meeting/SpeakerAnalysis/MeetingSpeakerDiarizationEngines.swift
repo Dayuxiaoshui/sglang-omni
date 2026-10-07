@@ -328,10 +328,20 @@ actor SortformerMeetingSpeakerDiarizationEngine: MeetingSpeakerDiarizationEngine
             }
         } catch {
             await stream.close()
+            await releaseOmniEndpoint(after: error, endpoint: endpoint)
             throw error
         }
         await stream.close()
         return turns
+    }
+
+    /// After a transport failure the server may be gone: the next session
+    /// acquires again, which restarts a server that died. A session that
+    /// started on an endpoint already replaced has nothing to release.
+    private func releaseOmniEndpoint(after error: Error, endpoint: OmniServerEndpoint) async {
+        let domain = (error as NSError).domain
+        guard omniEndpoint == endpoint, domain == NSURLErrorDomain || domain == NSPOSIXErrorDomain else { return }
+        await releaseOmniEndpoint()
     }
 
     private func omniEndpointIfAvailable() async throws -> OmniServerEndpoint {

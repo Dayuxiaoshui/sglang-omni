@@ -6,6 +6,7 @@
 #include <iostream>
 #include <optional>
 #include <stdexcept>
+#include <typeinfo>
 
 #include "http.h"
 
@@ -124,6 +125,17 @@ int SocketData(mg_connection *connection, int bits, char *data, size_t length,
     return 1;
   } else {
   }
+  // Audio comes in binary messages only, checked before it is buffered.
+  if (opcode == MG_WEBSOCKET_OPCODE_TEXT ||
+      socket->fragments.size() + length > kMaxFeedSamples * sizeof(float)) {
+    SendText(
+        connection,
+        Json({{"error", "A feed is a binary message of at most " +
+                            std::to_string(kMaxFeedSamples) + " samples."}})
+            .dump());
+    return 0;
+  } else {
+  }
   socket->fragments.append(data, length);
   if ((bits & 0x80) == 0) {
     return 1;
@@ -144,6 +156,13 @@ int SocketData(mg_connection *connection, int bits, char *data, size_t length,
   }
   std::vector<float> samples(sample_count);
   std::memcpy(samples.data(), message.data(), message.size());
+  for (const float sample : samples) {
+    if (!std::isfinite(sample)) {
+      SendText(connection, Json({{"error", "Audio must be finite."}}).dump());
+      return 0;
+    } else {
+    }
+  }
   try {
     const FeedResult result =
         service->Feed(samples, socket->stream, socket->options);

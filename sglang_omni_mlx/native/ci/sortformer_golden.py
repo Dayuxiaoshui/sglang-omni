@@ -16,7 +16,12 @@ have:
 - per-frame speaker probabilities within the tolerance (largest and 99th
   percentile difference), and few decisions at 0.5 on the other side;
 - speech per speaker, as the segments cover it, matching to within the
-  tolerance (symmetric difference over union, summed over speakers).
+  tolerance (symmetric difference over union, summed over speakers);
+
+and over all clips together, a mean difference and a share of frames off by
+more than 0.05 within the tolerance. Kernel differences stay near zero on
+most frames, while a wrong computation (a dropped left context, for one)
+moves many frames a little: these two catch what the per-clip limits allow.
 """
 
 from __future__ import annotations
@@ -98,6 +103,18 @@ def check(
     tolerance = golden["tolerance"]
     frame_seconds = golden["feed"]["frame_seconds"]
     failures = []
+    if not clip_ids:
+        failures.append("the golden file has no clips")
+    else:
+        pass
+    for clip in clip_ids:
+        if (
+            not golden["clips"][clip]["probabilities"]
+            or not golden["clips"][clip]["state"]
+        ):
+            failures.append(f"`{clip}`: the golden file has no reference output")
+        else:
+            pass
     differences = []
     flips = decisions = exact = close = 0
     worst_mismatch = 0.0
@@ -157,6 +174,16 @@ def check(
         close += int(within_one_frame(reference["segments"], segments, frame_seconds))
 
     everything = np.concatenate(differences) if differences else np.zeros(1)
+    mean = float(everything.mean())
+    over = float(np.mean(everything > 0.05))
+    if mean > tolerance["mean_abs_probability"]:
+        failures.append(f"mean probability difference {mean:.2e} over all clips")
+    else:
+        pass
+    if over > tolerance["fraction_over_0_05"]:
+        failures.append(f"{over:.2%} of probabilities are off by more than 0.05")
+    else:
+        pass
     lines = [
         f"### {golden['model']}",
         "",
@@ -164,6 +191,7 @@ def check(
         "",
         f"- Probabilities: {decisions // SPEAKERS} frames on {len(clip_ids)} clips, "
         f"max |Δ| {everything.max():.2g}, median {np.median(everything):.2g}, "
+        f"mean {mean:.2g}, {over:.2%} off by more than 0.05, "
         f"{flips} of {decisions} decisions flipped at 0.5",
         f"- Segments: {exact}/{len(clip_ids)} clips identical, {close}/{len(clip_ids)} "
         f"within one frame; speaker speech mismatch at most {worst_mismatch:.2%}",

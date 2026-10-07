@@ -280,8 +280,10 @@ ProbabilitiesToSegments(const std::vector<float> &probabilities,
           probabilities[static_cast<size_t>(frame) * speaker_count + speaker] >
           threshold;
       if (active) {
-        if (segment_start < 0)
+        if (segment_start < 0) {
           segment_start = frame;
+        } else {
+        }
       } else if (segment_start >= 0) {
         close(frame);
         segment_start = -1;

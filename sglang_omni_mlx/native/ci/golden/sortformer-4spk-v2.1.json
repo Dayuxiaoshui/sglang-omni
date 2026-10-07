@@ -16,7 +16,9 @@
   "max_abs_probability": 0.35,
   "p99_abs_probability": 0.1,
   "max_flipped_decisions": 0.01,
-  "max_speech_mismatch": 0.03
+  "max_speech_mismatch": 0.03,
+  "mean_abs_probability": 0.0006,
+  "fraction_over_0_05": 0.002
  },
  "clips": {
   "0064_en_mid": {
