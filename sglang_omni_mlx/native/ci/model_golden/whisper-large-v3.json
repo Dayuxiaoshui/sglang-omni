@@ -11,10 +11,10 @@
   "none": "en"
  },
  "baseline": {
-  "source": "pending",
-  "wer_en": 0.0,
-  "cer_zh": 0.0,
-  "mer_mixed": 0.0
+  "source": "Swift-path reference on MLX 0.31.1 (the original Voxt cannot load this npz checkpoint; 392/392 texts identical to native)",
+  "wer_en": 0.08483,
+  "cer_zh": 0.13264,
+  "mer_mixed": 0.88603
  },
  "metrics": {
   "wer_en": 0.08483,
