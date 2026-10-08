@@ -40,6 +40,10 @@ TOLERANCE = GOLDEN["tolerance"]
 SPEAKERS = 4
 # Clips of the golden file, so the original's outputs are known.
 CLIP = "0064_en_mid"
+# The longest feed a stream takes: one frame short of the checkpoint's speaker
+# cache update period (188 frames of 1,280 samples), so each feed's frames can
+# leave the FIFO in one update.
+MAX_FEED_SAMPLES = 187 * 1280
 OTHER_CLIP = "0076_en_mid"
 
 
@@ -351,6 +355,16 @@ def test_invalid_options_are_refused(server: Server, query: str) -> None:
         "text audio",
         np.array([0.0, np.nan], dtype="<f4").tobytes(),
         np.zeros(480_001, dtype="<f4").tobytes(),
+        # One frame more than a feed can retire from the FIFO (188 frames).
+        np.zeros(MAX_FEED_SAMPLES + 1, dtype="<f4").tobytes(),
+    ],
+    ids=[
+        "partial-sample",
+        "one-sample",
+        "text",
+        "nan",
+        "over-30-s",
+        "over-update-period",
     ],
 )
 def test_a_malformed_feed_closes_the_stream(server: Server, payload) -> None:
@@ -359,6 +373,29 @@ def test_a_malformed_feed_closes_the_stream(server: Server, payload) -> None:
         assert "error" in json.loads(socket.recv(timeout=30))
         with pytest.raises(Exception):
             socket.recv(timeout=30)
+
+
+def test_the_longest_feeds_keep_the_fifo_bounded(server: Server) -> None:
+    """Each feed adds at most what one update retires, however many come."""
+    chunk = np.zeros(MAX_FEED_SAMPLES, dtype="<f4")
+    chunk[::7] = 0.1
+    with server.stream() as socket:
+        for _ in range(8):
+            socket.send(chunk.tobytes())
+            state = json.loads(socket.recv(timeout=120))["state"]
+            assert state["fifo_length"] <= FEED["fifo_max"]
+            assert state["spkcache_length"] <= FEED["spkcache_max"]
+
+
+def test_state_limits_beyond_the_encoder_are_refused(server: Server) -> None:
+    """Cache, FIFO, context and a feed must fit the 1500 encoder positions."""
+    with pytest.raises((InvalidHandshake, OSError, EOFError)):
+        with server.stream("spkcache_max=700&fifo_max=700") as socket:
+            socket.send(np.zeros(1280, dtype="<f4").tobytes())
+            socket.recv(timeout=30)
+    with server.stream("spkcache_max=700&fifo_max=600") as socket:
+        socket.send(np.zeros(1280, dtype="<f4").tobytes())
+        assert "state" in json.loads(socket.recv(timeout=30))
 
 
 def test_shutdown_reports_stopped() -> None:

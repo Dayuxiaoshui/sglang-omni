@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "sortformer_service.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <iostream>
@@ -50,10 +51,13 @@ int ParseInt(const std::string &name, const std::string &value, int minimum,
   return number;
 }
 
-std::optional<FeedOptions> OptionsOf(const mg_connection *connection) {
+std::optional<FeedOptions> OptionsOf(const mg_connection *connection,
+                                     const SortformerService &service) {
   const char *query = mg_get_request_info(connection)->query_string;
   try {
-    return ParseFeedOptions(query ? query : "");
+    const FeedOptions options = ParseFeedOptions(query ? query : "");
+    service.CheckStateLimits(options);
+    return options;
   } catch (const std::exception &) {
     return std::nullopt;
   }
@@ -86,18 +90,22 @@ Json ResultJson(const FeedResult &result, const StreamingState &state) {
             {"frames_processed", state.frames_processed}}}};
 }
 
-int SocketConnect(const mg_connection *connection, void *) {
+int SocketConnect(const mg_connection *connection, void *data) {
   // Invalid options refuse the handshake.
-  return OptionsOf(connection).has_value() ? 0 : 1;
+  return OptionsOf(connection, *static_cast<SortformerService *>(data))
+                 .has_value()
+             ? 0
+             : 1;
 }
 
 void SocketReady(mg_connection *connection, void *data) {
   auto *service = static_cast<SortformerService *>(data);
   service->StreamOpened();
   mg_set_user_connection_data(
-      connection, new SocketState{OptionsOf(connection).value_or(FeedOptions{}),
-                                  service->NewStream(),
-                                  {}});
+      connection,
+      new SocketState{OptionsOf(connection, *service).value_or(FeedOptions{}),
+                      service->NewStream(),
+                      {}});
 }
 
 bool SendText(mg_connection *connection, const std::string &text) {
@@ -127,12 +135,13 @@ int SocketData(mg_connection *connection, int bits, char *data, size_t length,
   }
   // Audio comes in binary messages only, checked before it is buffered.
   if (opcode == MG_WEBSOCKET_OPCODE_TEXT ||
-      socket->fragments.size() + length > kMaxFeedSamples * sizeof(float)) {
-    SendText(
-        connection,
-        Json({{"error", "A feed is a binary message of at most " +
-                            std::to_string(kMaxFeedSamples) + " samples."}})
-            .dump());
+      socket->fragments.size() + length >
+          service->MaxFeedSamples() * sizeof(float)) {
+    SendText(connection,
+             Json({{"error", "A feed is a binary message of at most " +
+                                 std::to_string(service->MaxFeedSamples()) +
+                                 " samples."}})
+                 .dump());
     return 0;
   } else {
   }
@@ -145,12 +154,12 @@ int SocketData(mg_connection *connection, int bits, char *data, size_t length,
   socket->fragments.clear();
   const size_t sample_count = message.size() / sizeof(float);
   if (message.size() % sizeof(float) != 0 || sample_count < 2 ||
-      sample_count > kMaxFeedSamples) {
-    SendText(
-        connection,
-        Json({{"error", "A feed is 2 to " + std::to_string(kMaxFeedSamples) +
-                            " float32 little-endian samples."}})
-            .dump());
+      sample_count > service->MaxFeedSamples()) {
+    SendText(connection,
+             Json({{"error", "A feed is 2 to " +
+                                 std::to_string(service->MaxFeedSamples()) +
+                                 " float32 little-endian samples."}})
+                 .dump());
     return 0;
   } else {
   }
@@ -224,7 +233,27 @@ FeedOptions ParseFeedOptions(const std::string &query) {
 
 SortformerService::SortformerService(
     const std::filesystem::path &model_directory)
-    : model_(model_directory) {}
+    : model_(model_directory) {
+  const ModulesConfig &modules = model_.config().modules;
+  const auto samples_per_frame = static_cast<size_t>(
+      std::lround(model_.frame_duration() *
+                  static_cast<float>(model_.config().processor.sampling_rate)));
+  max_feed_samples_ = std::min(
+      kMaxFeedSamples, static_cast<size_t>(modules.spkcache_update_period - 1) *
+                           samples_per_frame);
+}
+
+void SortformerService::CheckStateLimits(const FeedOptions &options) const {
+  const Config &config = model_.config();
+  const int frames = options.spkcache_max + options.fifo_max +
+                     config.modules.chunk_left_context +
+                     config.modules.spkcache_update_period;
+  if (frames > config.tf_encoder.max_source_positions) {
+    throw std::invalid_argument(
+        "spkcache_max and fifo_max leave too few encoder positions");
+  } else {
+  }
+}
 
 void SortformerService::Register(mg_context *context) {
   mg_set_websocket_handler(context, "/v1/diarization/stream", SocketConnect,

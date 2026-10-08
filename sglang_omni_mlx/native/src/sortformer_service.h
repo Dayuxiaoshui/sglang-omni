@@ -27,8 +27,9 @@
 
 namespace sortformer {
 
-// Longest feed accepted: Voxt feeds 4.96 s; the encoder attends over the
-// whole feed, so an unbounded one could exhaust memory.
+// Longest feed accepted at all: Voxt feeds 4.96 s; the encoder attends over
+// the whole feed, so an unbounded one could exhaust memory. A checkpoint can
+// lower it (SortformerService::MaxFeedSamples).
 inline constexpr size_t kMaxFeedSamples = 16000 * 30;
 
 class SortformerService {
@@ -40,6 +41,13 @@ public:
   std::map<std::string, int> RequestStates() const;
 
   StreamingState NewStream() const { return model_.InitStreamingState(); }
+  // The longest feed: one frame short of the speaker cache update period, so
+  // a feed's frames leave the FIFO in one update and the FIFO stays within
+  // fifo_max however many feeds come.
+  size_t MaxFeedSamples() const { return max_feed_samples_; }
+  // Throws std::invalid_argument when the speaker cache, the FIFO, the left
+  // context and the longest feed would not fit the transformer's positions.
+  void CheckStateLimits(const FeedOptions &options) const;
   // One feed; inference runs one call at a time across all streams.
   FeedResult Feed(const std::vector<float> &samples, StreamingState &state,
                   const FeedOptions &options);
@@ -49,6 +57,7 @@ public:
 
 private:
   SortformerModel model_;
+  size_t max_feed_samples_ = kMaxFeedSamples;
   std::mutex inference_mutex_;
   mutable std::mutex states_mutex_;
   int open_streams_ = 0;
