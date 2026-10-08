@@ -140,6 +140,17 @@ private:
       Job job;
       {
         std::unique_lock<std::mutex> lock(mutex_);
+        // Decodes keep MLX's buffer cache, since freeing every step's buffers
+        // slows each token. Once nothing is queued it goes back to the
+        // system, so an idle server holds only the model. The wait lets the
+        // step a decode queued ahead before it stopped return its buffers.
+        if (queue_.empty()) {
+          lock.unlock();
+          mx::synchronize();
+          mx::clear_cache();
+          lock.lock();
+        } else {
+        }
         wake_.wait(lock, [&] { return stopping_ || !queue_.empty(); });
         if (queue_.empty()) {
           return;
@@ -536,9 +547,6 @@ int Serve(int argc, char **argv, const std::string &model_kind,
   } else {
   }
 
-  // Freed MLX buffers go back to the system: an idle server holds only the
-  // model.
-  mx::set_cache_limit(0);
   std::unique_ptr<ModelWorker> worker;
   std::atomic<bool> loaded(false);
   std::thread loader([&]() {
