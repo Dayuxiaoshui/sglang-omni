@@ -26,10 +26,10 @@
   }
  },
  "baseline": {
-  "source": "pending",
-  "wer_en": 0.0,
-  "cer_zh": 0.0,
-  "mer_mixed": 0.0
+  "source": "Original Voxt: Swift on MLX Audio (Voxt Phase 1 benchmark, in-app A0, 392/392 texts identical to native)",
+  "wer_en": 0.01361,
+  "cer_zh": 0.07648,
+  "mer_mixed": 0.16452
  },
  "tolerance": {
   "metric_pp": 1.5,
