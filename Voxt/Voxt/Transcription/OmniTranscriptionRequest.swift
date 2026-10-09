@@ -4,6 +4,7 @@ import Foundation
 nonisolated enum OmniASRModelKind: String, Sendable, CaseIterable {
     case qwen3ASR = "qwen3_asr"
     case whisper
+    case sileroVAD = "silero_vad"
 }
 
 nonisolated struct OmniTranscriptionRequest: Sendable, Equatable {

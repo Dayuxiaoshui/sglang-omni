@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# Native Qwen3-ASR runtime on MLX: one binary, no Python.
+# Native MLX runtime for Voxt (Qwen3-ASR, Silero VAD): one binary, no Python.
 cmake_minimum_required(VERSION 3.24)
 project(sglang_omni_mlx_native LANGUAGES C CXX)
 
@@ -60,23 +60,31 @@ target_link_libraries(qwen3_asr PUBLIC mlx nlohmann_json::nlohmann_json pcre2-8-
   "-framework CoreFoundation")
 target_compile_options(qwen3_asr PUBLIC ${MLX_CXX_FLAGS} PRIVATE -Wall -Wextra)
 
-add_library(asr_service STATIC src/asr_service.cpp)
+add_library(silero_vad STATIC src/silero_vad.cpp)
+target_include_directories(silero_vad PUBLIC src)
+target_link_libraries(silero_vad PUBLIC mlx nlohmann_json::nlohmann_json)
+target_compile_options(silero_vad PUBLIC ${MLX_CXX_FLAGS} PRIVATE -Wall -Wextra)
+
+add_library(asr_service STATIC src/asr_service.cpp src/http.cpp)
 target_link_libraries(asr_service PUBLIC qwen3_asr civetweb-c-library)
 target_compile_options(asr_service PRIVATE -Wall -Wextra)
 
-add_executable(qwen3_asr_server src/server.cpp)
-target_link_libraries(qwen3_asr_server PRIVATE asr_service)
+add_executable(qwen3_asr_server src/server.cpp src/vad_service.cpp)
+target_link_libraries(qwen3_asr_server PRIVATE asr_service silero_vad)
+
+add_executable(silero_vad_probe tools/silero_vad_probe.cpp)
+target_link_libraries(silero_vad_probe PRIVATE silero_vad qwen3_asr)
 
 add_executable(qwen3_asr_transcribe tools/transcribe.cpp)
 target_link_libraries(qwen3_asr_transcribe PRIVATE qwen3_asr)
 
-set_target_properties(qwen3_asr_server qwen3_asr_transcribe PROPERTIES
+set_target_properties(qwen3_asr_server qwen3_asr_transcribe silero_vad_probe PROPERTIES
   BUILD_RPATH "${MLX_LIBRARY_DIRS};@loader_path"
   INSTALL_RPATH "@loader_path")
 
 # Note (Jiaxin Deng): binaries sit next to libmlx.dylib and mlx.metallib,
 # which MLX loads from beside its library.
-install(TARGETS qwen3_asr_server qwen3_asr_transcribe RUNTIME DESTINATION bin)
+install(TARGETS qwen3_asr_server qwen3_asr_transcribe silero_vad_probe RUNTIME DESTINATION bin)
 # Note (Jiaxin Deng): libmlx.dylib loads sibling dylibs (libjaccl) via @rpath.
 file(GLOB MLX_RUNTIME_FILES "${MLX_LIBRARY_DIRS}/*.dylib" "${MLX_LIBRARY_DIRS}/mlx.metallib")
 foreach(runtime_file ${MLX_RUNTIME_FILES})

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-// Native Qwen3-ASR server with the API of sglang_omni_mlx.qwen3_asr.server:
-// asr_service's transcription API and supervisor protocol, plus the realtime
-// API on /v1/realtime.
+// Native MLX server for Voxt, one model per process on asr_service:
+// qwen3_asr (the API of sglang_omni_mlx.qwen3_asr.server, with the realtime
+// API on /v1/realtime) or silero_vad (vad_service.h's API, no transcriptions).
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -13,6 +13,7 @@
 #include "civetweb.h"
 #include "nlohmann/json.hpp"
 #include "realtime.h"
+#include "vad_service.h"
 
 namespace {
 
@@ -146,15 +147,42 @@ private:
   qwen3_asr::TranscriptionWorker *worker_ = nullptr;
 };
 
+class SileroVADModel : public asr_service::ServedModel {
+public:
+  explicit SileroVADModel(const std::filesystem::path &model_directory)
+      : service_(model_directory) {
+    // Note (Jiaxin Deng): freed MLX buffers go back to the system, so an idle
+    // server holds only the model.
+    mlx::core::set_cache_limit(0);
+  }
+
+  asr_service::Transcription
+  Prepare(std::vector<float>, const asr_service::FormFields &) const override {
+    throw std::logic_error("silero_vad serves no transcriptions");
+  }
+  bool Transcribes() const override { return false; }
+  std::map<std::string, int>
+  RequestStates(const qwen3_asr::TranscriptionWorker &) const override {
+    return service_.RequestStates();
+  }
+  void AddHandlers(mg_context *context,
+                   qwen3_asr::TranscriptionWorker &) override {
+    service_.Register(context);
+  }
+
+private:
+  silero_vad::VADService service_;
+};
+
 } // namespace
 
 int main(int argc, char **argv) {
   int decode_interval_ms = 1000;
   int first_decode_ms = 100;
   double max_segment_seconds = 30.0;
-  asr_service::ServedKind kind;
-  kind.model_kind = "qwen3_asr";
-  kind.flags = {
+  asr_service::ServedKind qwen3_asr;
+  qwen3_asr.model_kind = "qwen3_asr";
+  qwen3_asr.flags = {
       {"--decode-interval-ms",
        [&](const std::string &value) {
          decode_interval_ms = std::stoi(value);
@@ -166,7 +194,7 @@ int main(int argc, char **argv) {
          max_segment_seconds = std::stod(value);
        }},
   };
-  kind.check_flags = [&]() {
+  qwen3_asr.check_flags = [&]() {
     const double max_segment_samples =
         max_segment_seconds * qwen3_asr::kSampleRate;
     if (decode_interval_ms <= 0) {
@@ -180,11 +208,17 @@ int main(int argc, char **argv) {
     } else {
     }
   };
-  kind.load = [&](const std::filesystem::path &model_directory) {
+  qwen3_asr.load = [&](const std::filesystem::path &model_directory) {
     return std::make_unique<Qwen3ASRModel>(
         model_directory,
         qwen3_asr::MakeRealtimeSettings(decode_interval_ms, first_decode_ms,
                                         max_segment_seconds));
   };
-  return asr_service::Serve(argc, argv, kind);
+  // Note (khazic): Voxt passes the realtime flags to either kind.
+  asr_service::ServedKind silero_vad = qwen3_asr;
+  silero_vad.model_kind = "silero_vad";
+  silero_vad.load = [](const std::filesystem::path &model_directory) {
+    return std::make_unique<SileroVADModel>(model_directory);
+  };
+  return asr_service::Serve(argc, argv, {qwen3_asr, silero_vad});
 }

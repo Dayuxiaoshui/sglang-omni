@@ -1,13 +1,15 @@
 # Voxt on sglang-omni's native MLX runtime
 
-Voxt can run selected local ASR checkpoints on sglang-omni's native runtime
-(`sglang_omni_mlx/native`): C++ binaries on MLX, with no Python runtime. Voxt
-starts and owns the selected server. Other models keep their Swift backend.
+Voxt can run selected local ASR checkpoints and Silero VAD on sglang-omni's
+native runtime (`sglang_omni_mlx/native`): C++ binaries on MLX, with no Python
+runtime. Voxt starts and owns the selected server. Other models keep their
+Swift backend.
 
 | Checkpoint | Runtime | Voxt behavior kept |
 | --- | --- | --- |
-| `mlx-community/Qwen3-ASR-0.6B-4bit` | `qwen3_asr_server` | Final with context bias and language hint, Swift's audio layout and stop rules, 1200 s energy-cut chunks sharing one token budget, first detected language carried forward; live preview over the realtime socket, first decode after 100 ms of audio, then once a second |
+| `mlx-community/Qwen3-ASR-0.6B-4bit`, `mlx-community/Qwen3-ASR-1.7B-6bit`, `mlx-community/Qwen3-ASR-1.7B-8bit` | `qwen3_asr_server` | Final with context bias and language hint, Swift's audio layout and stop rules, 1200 s energy-cut chunks sharing one token budget, first detected language carried forward; live preview over the realtime socket, first decode after 100 ms of audio, then once a second |
 | `mlx-community/whisper-large-v3-turbo` | `whisper_server` | Final and batch preview with Voxt's language, token budget, temperature, and 30 s audio windows |
+| `mlx-community/silero-vad-v6` | `qwen3_asr_server --model-kind silero_vad` | Streaming speech probability per 512-sample chunk with one stream state per audio stream (`/v1/vad/stream`), and offline speech ranges with the meeting sensitivity profile's options (`/v1/vad/speech_timestamps`); one server shared by every detector, started on first use |
 
 ## Build and run
 
@@ -33,7 +35,8 @@ the original Swift backend for comparison.
 With the Omni backend enabled (`VOXT_ASR_BACKEND=omni`, `VOXT_OMNI_RUNTIME=<binary>`),
 selecting a listed checkpoint starts its runtime on a free loopback port.
 Switching models, idle unload, deletion and quitting stop it, and a runtime
-that dies is replaced on the next use.
+that dies is replaced on the next use. Silero VAD gets its own server the first
+time a detector needs it; it stops when the last detector unloads or Voxt quits.
 
 ## How it fits together
 

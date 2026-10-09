@@ -213,6 +213,9 @@ extension MLXTranscriber {
                 maxNewTokens: parameters.maxTokens,
                 temperature: parameters.temperature
             )).text
+        case .sileroVAD:
+            // Note (khazic): a Silero VAD server is never a loaded ASR model.
+            preconditionFailure("a Silero VAD server transcribes nothing")
         }
         // Note (khazic): chunk and window segments have chunk timing, which Voxt discards.
         return MLXDetachedInferenceResult(rawText: text, senseVoiceMetadata: nil, structuredSegments: [])

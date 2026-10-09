@@ -42,6 +42,16 @@ final class OmniASRRuntimeLaunchTests: XCTestCase {
         XCTAssertEqual(OmniASRBackend.modelKindsByRepo["mlx-community/whisper-large-v3-turbo"], .whisper)
     }
 
+    /// Every Qwen3-ASR checkpoint the native runtime is checked against runs on it;
+    /// other sizes and quantizations keep the Swift backend.
+    func testQwen3ASRCheckpointsWithGoldenOutputsRunOnTheNativeRuntime() {
+        XCTAssertEqual(OmniASRBackend.modelKindsByRepo.filter { $0.value == .qwen3ASR }, [
+            "mlx-community/Qwen3-ASR-0.6B-4bit": .qwen3ASR,
+            "mlx-community/Qwen3-ASR-1.7B-6bit": .qwen3ASR,
+            "mlx-community/Qwen3-ASR-1.7B-8bit": .qwen3ASR,
+        ])
+    }
+
     /// The runtime binary is started directly in supervised mode, not through Python.
     func testLaunchRunsTheRuntimeInSupervisedMode() async throws {
         let scratch = FileManager.default.temporaryDirectory
