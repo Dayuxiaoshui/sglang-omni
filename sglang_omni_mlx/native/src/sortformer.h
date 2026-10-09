@@ -69,10 +69,9 @@ struct Config {
   ProcessorConfig processor;
 };
 
-// One stream's state between feeds (Swift StreamingState). The initial arrays
-// are empty float32, so after the first feed the cache and FIFO are float32
-// even though the checkpoint is float16; later feeds then run the encoder in
-// float32, exactly as in Swift.
+// One stream's state between feeds (Swift StreamingState). The arrays start as
+// empty float32, so after the first feed the encoder runs in float32 even for a
+// float16 checkpoint, as in Swift.
 struct StreamingState {
   mlx::core::array spkcache;               // (1, cache_frames, emb_dim)
   mlx::core::array spkcache_preds;         // (1, cache_frames, speakers)

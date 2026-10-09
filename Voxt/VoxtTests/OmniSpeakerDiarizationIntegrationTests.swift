@@ -1,12 +1,7 @@
 // OmniSpeakerDiarizationIntegrationTests.swift
-// Voxt's Sortformer speaker analysis on the native runtime against MLXAudioVAD
-// in-process.
-//
-// Opt-in: VOXT_RUN_MODEL_TESTS=1, VOXT_ASR_BACKEND=omni with VOXT_OMNI_RUNTIME
-// (the native qwen3_asr_server binary), VOXT_MODEL_STORAGE_ROOT holding
-// mlx-audio/mlx-community_diar_streaming_sortformer_4spk-v2.1-fp16, and
-// VOXT_DIARIZATION_CLIP (a 16 kHz mono WAV with speech, ideally a minute or
-// more so the speaker cache fills and compresses).
+// Voxt's Sortformer speaker analysis on the native runtime against MLXAudioVAD.
+// Opt-in: VOXT_RUN_MODEL_TESTS=1, VOXT_ASR_BACKEND=omni, VOXT_OMNI_RUNTIME, VOXT_MODEL_STORAGE_ROOT
+// and VOXT_DIARIZATION_CLIP (16 kHz mono speech, a minute or more so the cache compresses).
 
 import MLX
 import MLXAudioVAD
@@ -15,9 +10,8 @@ import XCTest
 
 @MainActor
 final class OmniSpeakerDiarizationIntegrationTests: XCTestCase {
-    /// MLX 0.31 (Swift) and 0.32 (runtime) kernels differ in the last bits,
-    /// and the speaker cache can carry a difference through a clip: the
-    /// tolerances of the runtime's golden check.
+    // Note (Jiaxin Deng): the runtime golden check's tolerances; MLX 0.31 and 0.32 kernels
+    // differ in the last bits, and the speaker cache carries that through a clip.
     private let maxProbabilityDifference: Float = 0.35
     private let maxFlippedDecisions = 0.01
     private let maxSpeechMismatch = 0.03
@@ -43,8 +37,6 @@ final class OmniSpeakerDiarizationIntegrationTests: XCTestCase {
         return samples
     }
 
-    /// Voxt's feeds through MLXAudioVAD's SortformerModel, as the Swift engine
-    /// runs them.
     private func reference(samples: [Float]) async throws -> Reference {
         let storedDirectory = await MeetingSortformerModelStorage.validatedModelDirectory()
         let directory = try XCTUnwrap(storedDirectory)
@@ -93,7 +85,6 @@ final class OmniSpeakerDiarizationIntegrationTests: XCTestCase {
         return reference
     }
 
-    /// Speech per speaker on a 10 ms grid: symmetric difference over union.
     private func speechMismatch(
         _ expected: [(speaker: Int, start: Double, end: Double)],
         _ actual: [(speaker: Int, start: Double, end: Double)]

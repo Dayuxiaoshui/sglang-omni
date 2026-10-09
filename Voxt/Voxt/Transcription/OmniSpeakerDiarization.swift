@@ -68,7 +68,7 @@ actor OmniDiarizationStream {
     func feed(samples16k: [Float]) async throws -> OmniDiarizationFeed {
         let previous = tail
         let socket = socket
-        // Replies arrive in order: one exchange at a time per stream.
+        // Note (Jiaxin Deng): replies arrive in order, so exchanges run one at a time per stream.
         let exchange = Task { () throws -> OmniDiarizationFeed in
             await previous?.value
             try await socket.send(.data(OmniVoiceActivityStream.float32LittleEndian(samples16k)))

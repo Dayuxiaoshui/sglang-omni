@@ -1,27 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Sortformer golden check, called by check_golden.py for golden files of kind
-sortformer.
+"""Sortformer golden check against the original Voxt's outputs, for check_golden.py.
 
-The golden file holds the original Voxt's outputs (Swift MLXAudioVAD on Apple
-M5), not the native runtime's: Voxt runs MLX 0.31.1 and the runtime 0.32.3,
-whose kernels differ in the last bits, and a streaming speaker cache can carry
-such a difference across a whole clip. The same C++ built on MLX 0.31.1
-reproduces Swift bit for bit once two kernels are compiled with fast math as
-mlx-swift compiles its metallib, so the checks allow for kernel differences
-only. Every clip is fed as Voxt's meeting speaker analysis feeds it, and must
-have:
-
-- the same number of frames and the same final state (FIFO, speaker cache and
-  frames processed: these follow from the feed sizes alone);
-- per-frame speaker probabilities within the tolerance (largest and 99th
-  percentile difference), and few decisions at 0.5 on the other side;
-- speech per speaker, as the segments cover it, matching to within the
-  tolerance (symmetric difference over union, summed over speakers);
-
-and over all clips together, a mean difference and a share of frames off by
-more than 0.05 within the tolerance. Kernel differences stay near zero on
-most frames, while a wrong computation (a dropped left context, for one)
-moves many frames a little: these two catch what the per-clip limits allow.
+Voxt runs MLX 0.31.1 and the runtime 0.32.3, so the tolerances allow kernel
+differences only; the all-clip limits catch a computation that is slightly wrong.
 """
 
 from __future__ import annotations
@@ -35,7 +16,6 @@ from pathlib import Path
 import numpy as np
 
 SPEAKERS = 4
-# Segment times are compared on a 10 ms grid.
 GRID_SECONDS = 0.01
 
 

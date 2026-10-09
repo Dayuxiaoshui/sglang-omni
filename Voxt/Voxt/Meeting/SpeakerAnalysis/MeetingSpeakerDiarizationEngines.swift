@@ -69,8 +69,8 @@ enum MeetingSpeakerDiarizationEngineFactory {
 
 actor SortformerMeetingSpeakerDiarizationEngine: MeetingSpeakerDiarizationEngine {
     private var model: SortformerModel?
-    /// On the native runtime: a lease on the shared Sortformer server, held as
-    /// the Swift model would be, and the checkpoint's configuration.
+    // Note (Jiaxin Deng): the native path holds a server lease for as long as the Swift
+    // path would hold its model.
     private var omniEndpoint: OmniServerEndpoint?
     private var omniConfig: SortformerConfig?
 
@@ -217,9 +217,6 @@ actor SortformerMeetingSpeakerDiarizationEngine: MeetingSpeakerDiarizationEngine
         return turns
     }
 
-    /// The same session on the native runtime: one server stream per
-    /// contiguous run of audio holds the StreamingState, and each feed is
-    /// Swift `SortformerModel.feed` with the same arguments.
     private func runOmniSession(
         descriptors: [MeetingAudioAssetDescriptor],
         loadAsset: @escaping @Sendable (MeetingAudioAssetDescriptor) async -> MeetingAudioAsset?,
@@ -248,7 +245,8 @@ actor SortformerMeetingSpeakerDiarizationEngine: MeetingSpeakerDiarizationEngine
             threshold: 0.5, minDuration: 0, mergeGap: 0.18,
             spkcacheMax: policy.cacheMaximumFrames, fifoMax: MeetingSpeakerFeedPolicy.fifoMaximumFrames
         )
-        // The server refuses these limits at the handshake, which reads as a transport failure.
+        // Note (Jiaxin Deng): the server refuses these limits at the handshake, which reads
+        // as a transport failure, so they are checked here first.
         let encoderFrames = max(options.spkcacheMax, config.modulesConfig.spkcacheLen) + options.fifoMax
             + config.modulesConfig.chunkLeftContext + config.modulesConfig.spkcacheUpdatePeriod
         guard encoderFrames <= config.tfEncoderConfig.maxSourcePositions else {
@@ -269,7 +267,6 @@ actor SortformerMeetingSpeakerDiarizationEngine: MeetingSpeakerDiarizationEngine
                     let isContinuous = descriptor.source == previousDescriptor.source
                         && abs(descriptor.sessionStartOffset - expectedStart) < 0.05
                     if !isContinuous {
-                        // A new stream starts from a fresh state.
                         await stream.close()
                         stream = OmniDiarizationStream(endpoint: endpoint, options: options)
                         state = (0, 0, 0)
@@ -341,9 +338,8 @@ actor SortformerMeetingSpeakerDiarizationEngine: MeetingSpeakerDiarizationEngine
         return turns
     }
 
-    /// After a transport failure the server may be gone: the next session
-    /// acquires again, which restarts a server that died. A session that
-    /// started on an endpoint already replaced has nothing to release.
+    // Note (Jiaxin Deng): after a transport failure the server may be gone, so releasing lets
+    // the next session restart it; an endpoint already replaced has nothing to release.
     private func releaseOmniEndpoint(after error: Error, endpoint: OmniServerEndpoint) async {
         let domain = (error as NSError).domain
         guard omniEndpoint == endpoint, domain == NSURLErrorDomain || domain == NSPOSIXErrorDomain else { return }
@@ -363,7 +359,7 @@ actor SortformerMeetingSpeakerDiarizationEngine: MeetingSpeakerDiarizationEngine
         )
         let endpoint = try await OmniSortformerRuntime.shared.acquire(modelDirectory: directory)
         if let omniEndpoint {
-            // Another call acquired one while this one waited.
+            // Note (Jiaxin Deng): another call acquired one while this one awaited.
             await OmniSortformerRuntime.shared.release()
             return omniEndpoint
         }

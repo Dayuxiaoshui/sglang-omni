@@ -1,17 +1,7 @@
 // OmniDiarizationBenchmarkTests.swift
-// Measures Voxt's Sortformer meeting speaker analysis for the
-// original-against-native comparison, as OmniPhase1BenchmarkTests does for
-// Qwen3-ASR.
-//
-// Opt-in: runs only with VOXT_RUN_MODEL_TESTS=1 and VOXT_BENCH_OUT set. The
-// backend is the process's: MLXAudioVAD, or the native runtime with
-// VOXT_ASR_BACKEND=omni and VOXT_OMNI_RUNTIME, so both arms run identical code.
-//
-//   VOXT_MODEL_STORAGE_ROOT   model storage root holding mlx-audio/<repo>
-//   VOXT_BENCH_CLIPS          directory of <id>.wav (16 kHz mono)
-//   VOXT_BENCH_IDS            file of clip ids to run, one per line
-//   VOXT_BENCH_OUT            output directory
-//   VOXT_BENCH_RUN            run label, e.g. A0-r1
+// Measures Voxt's Sortformer meeting speaker analysis; VOXT_ASR_BACKEND=omni with
+// VOXT_OMNI_RUNTIME selects the native arm. Opt-in: VOXT_RUN_MODEL_TESTS=1 with
+// VOXT_MODEL_STORAGE_ROOT and VOXT_BENCH_CLIPS, _IDS, _OUT and _RUN.
 
 import Foundation
 import XCTest
@@ -19,7 +9,7 @@ import XCTest
 
 @MainActor
 final class OmniDiarizationBenchmarkTests: XCTestCase {
-    /// Samples per feed in Voxt's meeting speaker analysis (4.96 s).
+    // Note (Jiaxin Deng): Voxt's meeting speaker analysis feed (4.96 s).
     private let samplesPerFeed = 79_360
 
     func testDiarizationBenchmark() async throws {
@@ -46,8 +36,6 @@ final class OmniDiarizationBenchmarkTests: XCTestCase {
         writer.write(["event": "baseline", "run": run, "backend": OmniSortformerRuntime.isEnabled ? "native" : "swift",
                       "footprint_bytes": baseline.current, "processes": baseline.processes])
 
-        // File analysis: an imported recording, one engine per analysis, the
-        // model (or the server lease) released when it finishes.
         sampler.resetPeak()
         for (id, asset) in assets {
             let engine = SortformerMeetingSpeakerDiarizationEngine()
@@ -65,7 +53,6 @@ final class OmniDiarizationBenchmarkTests: XCTestCase {
         writer.write(["event": "files_done", "run": run, "peak_footprint_bytes": afterFiles.peak,
                       "after_release_footprint_bytes": released.current, "after_release_processes": released.processes])
 
-        // Live meeting analysis: one engine kept loaded, as Voxt's shared engine.
         let live = SortformerMeetingSpeakerDiarizationEngine()
         let first = assets[0].asset
         let coldAsset = MeetingAudioAsset(source: .systemAudio, samples: Array(first.samples.prefix(samplesPerFeed)),

@@ -4,8 +4,8 @@
 #include <cmath>
 #include <stdexcept>
 
-// Swift never fuses a multiply and an add; neither may the filter bank and
-// window arithmetic here, or the values stop being bit-identical.
+// Note (Jiaxin Deng): Swift never fuses a multiply and an add; contracting here
+// breaks bit identity of the filter bank and window.
 #pragma STDC FP_CONTRACT OFF
 
 namespace sortformer {
@@ -14,7 +14,6 @@ namespace mx = mlx::core;
 
 namespace {
 
-// Slaney mel scale constants, as Swift melFilters (fMin = 0).
 struct SlaneyScale {
   float min_hz = 0.0f;
   float linear_step_hz = 200.0f / 3.0f;
@@ -39,7 +38,7 @@ struct SlaneyScale {
   }
 };
 
-// 2^-24, the log guard NeMo adds before the log.
+// Note (Jiaxin Deng): 2^-24, the log guard NeMo adds before the log.
 constexpr float kLogGuard = 5.9604644775390625e-08f;
 
 } // namespace
@@ -82,7 +81,7 @@ std::vector<float> MelFilterBank(int sample_rate, int fft_size,
       }
     }
   }
-  // Slaney normalization, applied after the triangles as Swift does.
+  // Note (Jiaxin Deng): normalized after the triangles, in Swift's order.
   for (int mel_bin = 0; mel_bin < mel_bin_count; ++mel_bin) {
     const float normalization =
         2.0f / (edges_hz[mel_bin + 2] - edges_hz[mel_bin]);
@@ -97,7 +96,8 @@ std::vector<float> MelFilterBank(int sample_rate, int fft_size,
 
 std::vector<float> SymmetricHannWindow(int size) {
   const float denominator = static_cast<float>(size - 1);
-  // Swift's Float.pi: pi rounded toward zero, one step below (float)M_PI.
+  // Note (Jiaxin Deng): Swift's Float.pi rounds toward zero, one step below
+  // (float)M_PI.
   const float pi = std::nextafter(static_cast<float>(M_PI), 0.0f);
   std::vector<float> window(size);
   for (int n = 0; n < size; ++n) {
@@ -142,9 +142,8 @@ FeatureExtractor::operator()(const std::vector<float> &samples) const {
     throw std::invalid_argument("Sortformer needs at least two samples");
   } else {
   }
-  // (1, samples), as Swift expands a 1-D waveform to a batch of one.
   const mx::array waveform(samples.data(), {1, sample_count}, mx::float32);
-  // Preemphasis y[n] = x[n] - 0.97 x[n - 1] as separate MLX ops.
+  // Note (Jiaxin Deng): preemphasis as separate MLX ops, in Swift's op order.
   const mx::array first = mx::slice(waveform, {0, 0}, {1, 1});
   const mx::array rest = mx::subtract(
       mx::slice(waveform, {0, 1}, {1, sample_count}),
@@ -152,7 +151,6 @@ FeatureExtractor::operator()(const std::vector<float> &samples) const {
                    mx::slice(waveform, {0, 0}, {1, sample_count - 1})));
   const mx::array emphasized = mx::concatenate({first, rest}, -1);
 
-  // Centred STFT with zero (constant) padding of fft_size / 2 on each side.
   const int padding = config_.fft_size / 2;
   const mx::array audio = mx::reshape(emphasized, {sample_count});
   const mx::array padded =

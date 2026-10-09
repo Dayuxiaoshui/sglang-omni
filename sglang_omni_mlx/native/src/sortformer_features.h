@@ -35,10 +35,8 @@ class FeatureExtractor {
 public:
   explicit FeatureExtractor(const ProcessorConfig &config);
 
-  // Log-mel features (1, feature_size, frames) in float32: preemphasis,
-  // centred STFT with zero padding, power, mel and log(x + 2^-24). No
-  // normalization and no frame padding (the use_aosc path of Swift
-  // extractMelFeatures).
+  // Log-mel features (1, feature_size, frames) in float32, unnormalized and
+  // unpadded (the use_aosc path of Swift extractMelFeatures).
   mlx::core::array operator()(const std::vector<float> &samples) const;
 
   const std::vector<float> &mel_filters() const { return mel_filters_; }

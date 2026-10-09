@@ -8,7 +8,8 @@
 
 #include "sortformer.h"
 
-// Swift never fuses a multiply and an add; segment times must not either.
+// Note (Jiaxin Deng): Swift never fuses a multiply and an add; segment times
+// must not either.
 #pragma STDC FP_CONTRACT OFF
 
 namespace sortformer {
@@ -19,13 +20,11 @@ namespace {
 
 constexpr float kInfinity = std::numeric_limits<float>::infinity();
 
-// Swift scalar operands take the array's dtype.
+// Note (Jiaxin Deng): Swift scalar operands take the array's dtype.
 mx::array Scalar(float value, const mx::array &like) {
   return mx::array(value, like.dtype());
 }
 
-// Running mean of the embeddings of silent frames (sum of probabilities below
-// sil_threshold) among the frames moved out of the FIFO.
 void UpdateSilenceProfile(StreamingState &state, const mx::array &embeddings,
                           const mx::array &predictions,
                           float silence_threshold) {
@@ -80,8 +79,8 @@ mx::array DisableLowScores(const mx::array &predictions,
   return mx::where(replace, negative_infinity, result);
 }
 
-// Adds -scale * log(0.5) to each speaker's boost_count best finite scores; the
-// set comes from argpartition as in Swift (ties broken by MLX's sort).
+// Note (Jiaxin Deng): the boosted set comes from argpartition as in Swift, so
+// ties break the way MLX's sort does.
 mx::array BoostTopScores(const mx::array &scores, int boost_count,
                          float scale) {
   if (boost_count <= 0) {
@@ -104,7 +103,6 @@ mx::array BoostTopScores(const mx::array &scores, int boost_count,
     const mx::array batch_indices = mx::broadcast_to(
         mx::expand_dims(mx::arange(batch, mx::int32), 1), top_indices.shape());
     const mx::array ones = mx::astype(mx::ones_like(top_indices), mx::float32);
-    // mask.at[batch, top].add(1): exactly 1 at each (distinct) top index.
     const mx::array mask =
         mx::scatter_add(mx::zeros_like(column),
                         {batch_indices, mx::astype(top_indices, mx::int32)},
@@ -117,8 +115,8 @@ mx::array BoostTopScores(const mx::array &scores, int boost_count,
   return mx::stack(boosted, -1);
 }
 
-// Sorted (by speaker, then frame) indices of the cache_length best scores;
-// disabled entries (non-finite, or a silence pad frame) point at frame 0.
+// Note (Jiaxin Deng): disabled entries (non-finite, or a silence pad frame)
+// point at frame 0.
 std::pair<mx::array, mx::array> TopIndices(const mx::array &scores,
                                            int cache_length,
                                            int silence_frames_per_speaker,
@@ -133,7 +131,8 @@ std::pair<mx::array, mx::array> TopIndices(const mx::array &scores,
                                 {0, 0}, {batch, k});
   const mx::array values = mx::take_along_axis(flat, indices, 1);
   const mx::array valid = mx::greater(values, Scalar(-kInfinity, values));
-  // uint32 indices against an int32 constant promote to int64, as in Swift.
+  // Note (Jiaxin Deng): uint32 indices against an int32 constant promote to
+  // int64, as in Swift.
   indices = mx::where(valid, indices, mx::array(max_index, mx::int32));
   mx::array sorted = mx::sort(indices, 1);
   mx::array disabled = mx::equal(sorted, mx::array(max_index, sorted.dtype()));
@@ -164,7 +163,6 @@ void CompressSpeakerCache(mx::array &embeddings, mx::array &predictions,
   scores = DisableLowScores(predictions, scores, min_positive);
   const int batch = scores.shape(0);
   if (modules.scores_boost_latest > 0 && scores.shape(1) > cache_length) {
-    // Frames newer than the cache get a small boost.
     const mx::array boost_mask = mx::concatenate(
         {mx::zeros({batch, cache_length, speakers}, mx::float32),
          mx::full({batch, scores.shape(1) - cache_length, speakers},
@@ -176,7 +174,6 @@ void CompressSpeakerCache(mx::array &embeddings, mx::array &predictions,
   scores = BoostTopScores(scores, strong_boost, 2.0f);
   scores = BoostTopScores(scores, weak_boost, 1.0f);
   if (silence_per_speaker > 0) {
-    // Silence pad frames always win a place in the cache.
     scores = mx::concatenate(
         {scores, mx::full({batch, silence_per_speaker, speakers}, kInfinity,
                           mx::float32)},
@@ -310,7 +307,8 @@ ProbabilitiesToSegments(const std::vector<float> &probabilities,
     segments.insert(segments.end(), speaker_segments.begin(),
                     speaker_segments.end());
   }
-  // Swift's sort is stable in practice; ties keep speaker order.
+  // Note (Jiaxin Deng): Swift's sort is stable in practice; ties keep speaker
+  // order.
   std::stable_sort(
       segments.begin(), segments.end(),
       [](const Segment &a, const Segment &b) { return a.start < b.start; });
