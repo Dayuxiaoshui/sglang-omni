@@ -214,7 +214,7 @@ extension MLXTranscriber {
                 temperature: parameters.temperature
             )).text
         }
-        // Chunk and window segments have chunk timing, which Voxt discards.
+        // Note (khazic): chunk and window segments have chunk timing, which Voxt discards.
         return MLXDetachedInferenceResult(rawText: text, senseVoiceMetadata: nil, structuredSegments: [])
     }
 

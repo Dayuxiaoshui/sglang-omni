@@ -21,11 +21,13 @@ constexpr int kReflectPadding = kFftSize / 2;
 constexpr float kLogMelFloor = 1e-10f;
 constexpr float kLogMelDynamicRange = 8.0f;
 constexpr float kLayerNormEpsilon = 1e-5f;
-// The decoder's additive causal mask value; it becomes -inf in float16.
+// Note (khazic): the decoder's additive causal mask value; it becomes -inf in
+// float16.
 constexpr float kMaskedScore = -1e9f;
 
 std::vector<mx::array> GeluGraph(const std::vector<mx::array> &inputs) {
-  // x * (1 + erf(x / sqrt(2))) / 2, its scalars in x's dtype as in Swift.
+  // Note (khazic): x * (1 + erf(x / sqrt(2))) / 2, its scalars in x's dtype as
+  // in Swift.
   const mx::array &x = inputs[0];
   const mx::Dtype dtype = x.dtype();
   return {mx::divide(
@@ -36,13 +38,15 @@ std::vector<mx::array> GeluGraph(const std::vector<mx::array> &inputs) {
       mx::array(2.0f, dtype))};
 }
 
-// Compiled shapeless, as the Swift port's gelu is: one fused kernel.
+// Note (khazic): compiled shapeless, as the Swift port's gelu is: one fused
+// kernel.
 mx::array Gelu(const mx::array &x) {
   static const auto compiled = mx::compile(GeluGraph, true);
   return compiled({x})[0];
 }
 
-// Fixed sinusoids of the encoder positions, computed in double precision.
+// Note (khazic): fixed sinusoids of the encoder positions, computed in double
+// precision.
 mx::array Sinusoids(int length, int channels) {
   const int half = channels / 2;
   const double log_timescale_increment =
@@ -65,7 +69,8 @@ mx::array Sinusoids(int length, int channels) {
   return mx::array(values.data(), {length, channels}, mx::float32);
 }
 
-// The periodic Hann window, built with MLX ops from Swift's Float.pi.
+// Note (khazic): the periodic Hann window, built with MLX ops from Swift's
+// Float.pi.
 mx::array HannWindow() {
   const float swift_pi = std::nextafter(static_cast<float>(M_PI), 0.0f);
   const mx::array sample_indices =
@@ -141,7 +146,7 @@ WhisperModel::WhisperModel(const std::filesystem::path &model_directory)
     }
   }
   weights_.erase("alignment_heads");
-  // The checkpoint leaves out the fixed encoder positions.
+  // Note (khazic): the checkpoint leaves out the fixed encoder positions.
   if (weights_.count("encoder.positional_embedding") == 0) {
     weights_.insert_or_assign(
         "encoder.positional_embedding",
@@ -227,7 +232,8 @@ mx::array WhisperModel::EncoderLayer(const mx::array &x, int layer) const {
 mx::array WhisperModel::Encode(const std::vector<float> &window_samples) const {
   const int sample_count = static_cast<int>(window_samples.size());
   const mx::array audio(window_samples.data(), {sample_count}, mx::float32);
-  // Reflect padding: audio[1:201] reversed, audio, audio[-201:-1] reversed.
+  // Note (khazic): reflect padding: audio[1:201] reversed, audio,
+  // audio[-201:-1] reversed.
   const mx::array head = mx::slice(audio, {kReflectPadding}, {0}, {-1});
   const mx::array tail = mx::slice(audio, {sample_count - 2},
                                    {sample_count - kReflectPadding - 2}, {-1});
@@ -237,8 +243,8 @@ mx::array WhisperModel::Encode(const std::vector<float> &window_samples) const {
       mx::as_strided(padded, {frame_count, kFftSize}, {kHopLength, 1}, 0);
   mx::array magnitudes = mx::square(mx::abs(mx::fft::rfft(
       mx::multiply(frames, mx::expand_dims(hann_window_, 0)), -1)));
-  // The final centered STFT frame is dropped, as Whisper's reference front
-  // end drops it.
+  // Note (khazic): the final centered STFT frame is dropped, as Whisper's
+  // reference front end drops it.
   magnitudes = mx::transpose(
       mx::slice(magnitudes, {0, 0}, {frame_count - 1, magnitudes.shape(1)}),
       {1, 0});
@@ -332,7 +338,8 @@ mx::array WhisperModel::Decode(const mx::array &token_ids, int start_position,
   const int width = hidden.shape(2);
   const mx::array last = mx::reshape(
       mx::slice(hidden, {0, length - 1, 0}, {1, length, width}), {width});
-  // Tied output projection: the token embedding used as a linear layer.
+  // Note (khazic): tied output projection: the token embedding used as a linear
+  // layer.
   return mx::matmul(last,
                     mx::transpose(Weight("decoder.token_embedding.weight")));
 }

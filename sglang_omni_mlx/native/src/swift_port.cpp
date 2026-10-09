@@ -137,7 +137,8 @@ std::string TrimWhitespace(const std::string &text, bool newlines) {
     }
     begin += length;
   }
-  // Scan forward, remembering where the last kept code point ended.
+  // Note (khazic): scan forward, remembering where the last kept code point
+  // ended.
   size_t kept_end = begin;
   for (size_t offset = begin; offset < text.size();) {
     size_t length = 0;

@@ -17,7 +17,8 @@ namespace {
 
 constexpr float kSuppressedLogit = -1e9f;
 
-// The English names Swift's WhisperTokenizer maps to codes, as it lists them.
+// Note (khazic): the English names Swift's WhisperTokenizer maps to codes, as
+// it lists them.
 const std::map<std::string, std::string> &LanguageNameToCode() {
   static const std::map<std::string, std::string> table = {
       {"english", "en"},    {"chinese", "zh"},    {"mandarin", "zh"},
@@ -82,7 +83,8 @@ std::optional<std::string> AddedTokenLanguage(const std::string &content) {
   }
 }
 
-// The Swift tokenizer's cleanup of English tokenization spaces, in its order.
+// Note (khazic): the Swift tokenizer's cleanup of English tokenization spaces,
+// in its order.
 std::string CleanUpTokenizationSpaces(std::string text) {
   static const std::pair<std::string, std::string> kReplacements[] = {
       {" .", "."},     {" ?", "?"},     {" !", "!"},   {" ,", ","},
@@ -281,8 +283,8 @@ WhisperTranscriber::TranscribeWindow(const std::vector<float> &window_samples,
     } else {
     }
     const mx::array current = token;
-    // Queue the next step before reading this token, so the GPU decodes while
-    // the end of text is checked.
+    // Note (khazic): queue the next step before reading this token, so the GPU
+    // decodes while the end of text is checked.
     if (step + 1 < max_new_tokens) {
       token =
           next_token(model_.Decode(mx::reshape(current, {1, 1}),
@@ -310,8 +312,8 @@ WhisperTranscriber::Transcribe(const std::vector<float> &samples,
                                const std::atomic<bool> &cancel) const {
   qwen3_asr::TranscriptionResult result;
   result.finish_reason = qwen3_asr::FinishReason::kStop;
-  // Start of transcript, then for multilingual checkpoints the language (when
-  // it resolves) and the transcribe task, then no timestamps.
+  // Note (khazic): start of transcript, then for multilingual checkpoints the
+  // language (when it resolves) and the transcribe task, then no timestamps.
   std::vector<int> prompt_ids = {start_of_transcript_id_};
   if (is_multilingual_) {
     result.language = LanguageCode(options.language);
@@ -327,8 +329,8 @@ WhisperTranscriber::Transcribe(const std::vector<float> &samples,
   }
   prompt_ids.push_back(no_timestamps_id_);
   const int context_length = model_.config().text_context_length;
-  // The Swift port's default budget leaves 16 positions of the text context
-  // unused.
+  // Note (khazic): the Swift port's default budget leaves 16 positions of the
+  // text context unused.
   const int requested_tokens = options.max_new_tokens != 0
                                    ? options.max_new_tokens
                                    : context_length - 16;
@@ -336,13 +338,14 @@ WhisperTranscriber::Transcribe(const std::vector<float> &samples,
       1, std::min(requested_tokens,
                   context_length - static_cast<int>(prompt_ids.size()) - 1));
 
-  // Audio up to 30 s is one window; longer audio is cut every 30 s. Each
-  // window is padded with silence, or trimmed, to exactly 30 s and decoded on
-  // its own.
+  // Note (khazic): audio up to 30 s is one window; longer audio is cut every 30
+  // s. Each window is padded with silence, or trimmed, to exactly 30 s and
+  // decoded on its own.
   const size_t window_count = std::max<size_t>(
       1, (samples.size() + kWindowSampleCount - 1) / kWindowSampleCount);
   for (size_t window_index = 0; window_index < window_count; ++window_index) {
-    // A request cancelled between windows skips the next encoder pass.
+    // Note (khazic): a request cancelled between windows skips the next encoder
+    // pass.
     if (cancel.load()) {
       throw qwen3_asr::TranscriptionCancelled();
     } else {

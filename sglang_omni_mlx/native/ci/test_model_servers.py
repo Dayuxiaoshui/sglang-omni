@@ -142,7 +142,7 @@ def test_whisper_language_with_a_truncated_utf8_sequence_is_unknown(
         body,
         {"Content-Type": f"multipart/form-data; boundary={boundary}"},
     )
-    # An unknown language sends no language token, as Swift does; the
+    # Note (khazic): an unknown language sends no language token, as Swift does; the
     # truncated sequence must not be read past.
     assert status == 200
     assert "text" in json.loads(response)
@@ -177,7 +177,7 @@ def test_whisper_disconnected_stream_stops_its_decode(
         "request_states"
     ] == {"running": 1}
     closed_at = time.monotonic()
-    # http.client keeps the socket open while the response object is.
+    # Note (khazic): http.client keeps the socket open while the response object is.
     response.close()
     connection.close()
     while (
