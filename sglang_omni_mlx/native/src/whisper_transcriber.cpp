@@ -17,6 +17,7 @@ namespace {
 
 constexpr float kSuppressedLogit = -1e9f;
 
+// The English names Swift's WhisperTokenizer maps to codes, as it lists them.
 const std::map<std::string, std::string> &LanguageNameToCode() {
   static const std::map<std::string, std::string> table = {
       {"english", "en"},    {"chinese", "zh"},    {"mandarin", "zh"},

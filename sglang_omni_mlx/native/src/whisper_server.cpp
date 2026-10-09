@@ -6,8 +6,10 @@
 //   whisper_server --model-path DIR [--model-name NAME] [--host H] [--port P]
 //   whisper_server --supervised --model-kind whisper --model-directory DIR
 //
-// Request fields beside the audio: language (an ISO code or an English name),
-// max_new_tokens, temperature, stream and include_generation_metadata.
+// Request fields beside the audio: language (a code in the checkpoint's
+// tokenizer, or one of the English names Swift's WhisperTokenizer maps; any
+// other value sends no language token), max_new_tokens, temperature, stream
+// and include_generation_metadata.
 #include <stdexcept>
 
 #include "asr_service.h"
@@ -30,7 +32,9 @@ public:
                                  .value_or(options.max_new_tokens);
     options.temperature = asr_service::NumberField(form, "temperature")
                               .value_or(options.temperature);
-    if (options.temperature < 0) {
+    if (options.max_new_tokens < 0) {
+      throw std::invalid_argument("max_new_tokens must be nonnegative");
+    } else if (options.temperature < 0) {
       throw std::invalid_argument("temperature must be nonnegative");
     } else {
     }

@@ -104,6 +104,7 @@ def test_whisper_plain_request_returns_json_text(whisper_server: ModelServer) ->
         ({"temperature": "nan"}, "wav"),
         ({"temperature": "inf"}, "wav"),
         ({"temperature": "-1"}, "wav"),
+        ({"max_new_tokens": "-1"}, "wav"),
     ],
 )
 def test_whisper_invalid_requests_are_rejected(
