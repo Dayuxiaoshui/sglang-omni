@@ -32,6 +32,13 @@ public:
                                 const FormFields &form) const = 0;
   // Adds handlers beyond the transcription API once the server listens.
   virtual void AddHandlers(mg_context *, qwen3_asr::TranscriptionWorker &) {}
+  // False for a model that serves no transcriptions.
+  virtual bool Transcribes() const { return true; }
+  // Request counts for /health.
+  virtual std::map<std::string, int>
+  RequestStates(const qwen3_asr::TranscriptionWorker &worker) const {
+    return worker.RequestStates();
+  }
 };
 
 using ModelLoader =
@@ -57,10 +64,14 @@ std::optional<int> IntegerField(const FormFields &form,
 std::optional<float> NumberField(const FormFields &form,
                                  const std::string &name);
 
-// Runs the server for kind until it is stopped; returns the exit code.
+// Runs the server for the kind --model-kind names (the first by default)
+// until it is stopped; returns the exit code.
 //
 //   BINARY --model-path DIR [--model-name NAME] [--host H] [--port P]
 //   BINARY --supervised --model-kind KIND --model-directory DIR
-int Serve(int argc, char **argv, const ServedKind &kind);
+int Serve(int argc, char **argv, const std::vector<ServedKind> &kinds);
+inline int Serve(int argc, char **argv, const ServedKind &kind) {
+  return Serve(argc, argv, std::vector<ServedKind>{kind});
+}
 
 } // namespace asr_service
