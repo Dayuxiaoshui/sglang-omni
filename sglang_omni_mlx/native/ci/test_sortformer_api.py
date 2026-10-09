@@ -387,13 +387,32 @@ def test_the_longest_feeds_keep_the_fifo_bounded(server: Server) -> None:
             assert state["spkcache_length"] <= FEED["spkcache_max"]
 
 
-def test_state_limits_beyond_the_encoder_are_refused(server: Server) -> None:
+@pytest.mark.parametrize(
+    "query",
+    [
+        "spkcache_max=700&fifo_max=700",
+        # A compressed cache holds the checkpoint's 188 frames, not spkcache_max.
+        "spkcache_max=1&fifo_max=1310",
+        "spkcache_max=100&fifo_max=1200",
+    ],
+)
+def test_state_limits_beyond_the_encoder_are_refused(
+    server: Server, query: str
+) -> None:
     """Cache, FIFO, context and a feed must fit the 1500 encoder positions."""
     with pytest.raises((InvalidHandshake, OSError, EOFError)):
-        with server.stream("spkcache_max=700&fifo_max=700") as socket:
+        with server.stream(query) as socket:
             socket.send(np.zeros(1280, dtype="<f4").tobytes())
             socket.recv(timeout=30)
-    with server.stream("spkcache_max=700&fifo_max=600") as socket:
+
+
+@pytest.mark.parametrize(
+    "query", ["spkcache_max=700&fifo_max=600", "spkcache_max=1&fifo_max=1123"]
+)
+def test_state_limits_within_the_encoder_are_accepted(
+    server: Server, query: str
+) -> None:
+    with server.stream(query) as socket:
         socket.send(np.zeros(1280, dtype="<f4").tobytes())
         assert "state" in json.loads(socket.recv(timeout=30))
 

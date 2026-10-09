@@ -245,7 +245,10 @@ SortformerService::SortformerService(
 
 void SortformerService::CheckStateLimits(const FeedOptions &options) const {
   const Config &config = model_.config();
-  const int frames = options.spkcache_max + options.fifo_max +
+  // Compression leaves spkcache_len frames whatever spkcache_max is.
+  const int cache_frames =
+      std::max(options.spkcache_max, config.modules.spkcache_len);
+  const int frames = cache_frames + options.fifo_max +
                      config.modules.chunk_left_context +
                      config.modules.spkcache_update_period;
   if (frames > config.tf_encoder.max_source_positions) {
