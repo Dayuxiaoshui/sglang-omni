@@ -7,7 +7,8 @@
 
 Like check_golden.py, with the same per-chip golden outputs and tolerance, for a
 model served by its own binary. The golden file also names the parity tool
-(whisper_transcribe, ...), its request flags, and the language each clip
+(whisper_transcribe, ...), its request flags (a true one passed bare, a false
+one left out), and the language each clip
 language is sent with (a user with that main language); every corpus clip is
 transcribed, one tool run per language sent.
 """
@@ -49,7 +50,13 @@ def transcribe_with_tool(
         str(model_directory(data_root, golden["model"])),
     ]
     for flag, value in golden["request"].items():
-        command += [f"--{flag.replace('_', '-')}", str(value)]
+        option = f"--{flag.replace('_', '-')}"
+        if value is True:
+            command.append(option)
+        elif value is False:
+            pass
+        else:
+            command += [option, str(value)]
     clips_by_request_language: dict[str | None, list[Path]] = {}
     for clip_id, clip in manifest.items():
         clips_by_request_language.setdefault(
