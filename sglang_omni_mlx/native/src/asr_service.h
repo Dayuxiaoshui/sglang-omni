@@ -37,8 +37,9 @@ public:
 using ModelLoader =
     std::function<std::unique_ptr<ServedModel>(const std::filesystem::path &)>;
 
-// A form field as given, or as an integer or a number; the latter two throw
-// std::invalid_argument when the field is not one, and leave out empty fields.
+// A form field as given, or as an integer or a finite number; the latter two
+// throw std::invalid_argument when the field is not one, and leave out empty
+// fields.
 std::optional<std::string> TextField(const FormFields &form,
                                      const std::string &name);
 std::optional<int> IntegerField(const FormFields &form,

@@ -8,6 +8,8 @@
 //
 // Request fields beside the audio: language (an ISO code or an English name),
 // max_new_tokens, temperature, stream and include_generation_metadata.
+#include <stdexcept>
+
 #include "asr_service.h"
 #include "whisper_transcriber.h"
 
@@ -28,6 +30,10 @@ public:
                                  .value_or(options.max_new_tokens);
     options.temperature = asr_service::NumberField(form, "temperature")
                               .value_or(options.temperature);
+    if (options.temperature < 0) {
+      throw std::invalid_argument("temperature must be nonnegative");
+    } else {
+    }
     return [this, samples = std::move(samples),
             options](const std::atomic<bool> &cancel) {
       return transcriber_.Transcribe(samples, options, cancel);

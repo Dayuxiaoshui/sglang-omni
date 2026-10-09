@@ -1,10 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 #include "asr_service.h"
 
-#include <arpa/inet.h>
-#include <netinet/in.h>
 #include <signal.h>
-#include <sys/socket.h>
 #include <unistd.h>
 
 #include <chrono>
@@ -164,6 +161,11 @@ private:
       std::optional<TranscriptionResult> result;
       std::exception_ptr error;
       try {
+        // A request cancelled while it waited never starts its model work.
+        if (job.cancel->load()) {
+          throw qwen3_asr::TranscriptionCancelled();
+        } else {
+        }
         result = job.transcription(*job.cancel);
       } catch (...) {
         error = std::current_exception();
@@ -206,7 +208,8 @@ int WriteJson(mg_connection *connection, int status, const Json &body) {
   WriteResponse(connection, status,
                 status == 200   ? "OK"
                 : status == 400 ? "Bad Request"
-                                : "Error",
+                : status == 405 ? "Method Not Allowed"
+                                : "Internal Server Error",
                 "application/json", body.dump());
   return status;
 }
@@ -347,19 +350,6 @@ int HandleTranscriptions(mg_connection *connection, void *data) {
   return 200;
 }
 
-int FreeLoopbackPort() {
-  const int descriptor = socket(AF_INET, SOCK_STREAM, 0);
-  sockaddr_in address{};
-  address.sin_family = AF_INET;
-  address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
-  address.sin_port = 0;
-  bind(descriptor, reinterpret_cast<sockaddr *>(&address), sizeof(address));
-  socklen_t length = sizeof(address);
-  getsockname(descriptor, reinterpret_cast<sockaddr *>(&address), &length);
-  close(descriptor);
-  return ntohs(address.sin_port);
-}
-
 std::string RandomHex(int length) {
   std::mt19937_64 generator{std::random_device{}()};
   static constexpr char kHex[] = "0123456789abcdef";
@@ -426,10 +416,6 @@ Arguments ParseArguments(int argc, char **argv,
     arguments.model_name = "voxt-" + served_model_kind + "-" + RandomHex(12);
   } else {
   }
-  if (arguments.port == 0) {
-    arguments.port = FreeLoopbackPort();
-  } else {
-  }
   return arguments;
 }
 
@@ -480,7 +466,12 @@ std::optional<int> IntegerField(const FormFields &form,
   } else {
   }
   size_t parsed = 0;
-  const int value = std::stoi(*text, &parsed);
+  int value = 0;
+  try {
+    value = std::stoi(*text, &parsed);
+  } catch (const std::logic_error &) {
+    // parsed stays 0, so the check below names the field.
+  }
   if (parsed != text->size()) {
     throw std::invalid_argument(name + " must be an integer");
   } else {
@@ -496,9 +487,14 @@ std::optional<float> NumberField(const FormFields &form,
   } else {
   }
   size_t parsed = 0;
-  const float value = std::stof(*text, &parsed);
-  if (parsed != text->size()) {
-    throw std::invalid_argument(name + " must be a number");
+  float value = 0;
+  try {
+    value = std::stof(*text, &parsed);
+  } catch (const std::logic_error &) {
+    // parsed stays 0, so the check below names the field.
+  }
+  if (parsed != text->size() || !std::isfinite(value)) {
+    throw std::invalid_argument(name + " must be a finite number");
   } else {
   }
   return value;
@@ -596,6 +592,11 @@ int Serve(int argc, char **argv, const std::string &model_kind,
     return 1;
   } else {
   }
+  // Port 0 lets the system pick a free port when the socket binds.
+  mg_server_port server_port{};
+  mg_get_server_ports(context, 1, &server_port);
+  const std::string endpoint =
+      arguments.host + ":" + std::to_string(server_port.port);
   mg_set_request_handler(context, "/health$", HandleHealth, &state);
   mg_set_request_handler(context, "/v1/models$", HandleModels, &state);
   mg_set_request_handler(context, "/v1/audio/transcriptions$",
@@ -606,12 +607,12 @@ int Serve(int argc, char **argv, const std::string &model_kind,
   if (arguments.supervised) {
     Emit({{"event", "ready"},
           {"host", arguments.host},
-          {"port", arguments.port},
+          {"port", server_port.port},
           {"model_name", arguments.model_name},
           {"server_pid", static_cast<int>(getpid())},
           {"startup_s", std::round(startup_seconds * 1000) / 1000}});
   } else {
-    std::cerr << "serving " << arguments.model_name << " on " << listening
+    std::cerr << "serving " << arguments.model_name << " on " << endpoint
               << " after " << startup_seconds << " s\n";
   }
 
