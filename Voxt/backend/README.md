@@ -58,7 +58,7 @@ that dies is replaced on the next use.
   - `provision.py` fetches the pinned checkpoint and rebuilds the frozen corpus from its public sources, checking every file's SHA-256.
   - `check_golden.py` runs the runtime over the 392-clip corpus with Voxt's Final request and requires every clip to match the golden output. It reports error rates next to the original Swift backend's.
 - The `Voxt Mac CI` workflow runs these on the repository's Apple Silicon runner, together with the server API tests and Voxt's Omni unit tests.
-- The Whisper check pins its checkpoint and tokenizer, compares all 392 frozen clips with its native golden, and tests the transcription server. The golden records the original Swift backend's error rates as its baseline.
+- The Whisper check pins its checkpoint and tokenizer, runs all 392 frozen clips through `check_model_golden.py`, and tests the transcription server. Its golden keeps per-chip outputs with `check_golden.py`'s tolerance, and records the original Swift backend's error rates as its baseline.
 - Voxt's opt-in suites need the installed model and `VOXT_RUN_MODEL_TESTS=1`:
   - `OmniPhase1LifecycleTests`:
     - load/Final/unload rounds that must leave no process behind;

@@ -121,14 +121,6 @@ jobs:
           done
           exit $status
 
-      - name: Upload this chip's outputs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: golden-outputs
-          path: ${{ runner.temp }}/golden-outputs
-          if-no-files-found: ignore
-
       - name: Server API tests
         env:
           NATIVE_RUNTIME_BIN: ${{ runner.temp }}/runtime/bin
@@ -149,9 +141,18 @@ jobs:
           result=0
           for golden in sglang_omni_mlx/native/ci/model_golden/*.json; do
             "$VOXT_CI_ROOT/venv/bin/python" sglang_omni_mlx/native/ci/check_model_golden.py \
-              --runtime-bin "$RUNNER_TEMP/runtime/bin" --data-root "$VOXT_CI_ROOT/data" --golden "$golden" || result=1
+              --runtime-bin "$RUNNER_TEMP/runtime/bin" --data-root "$VOXT_CI_ROOT/data" --golden "$golden" \
+              --outputs "$RUNNER_TEMP/golden-outputs" || result=1
           done
           exit "$result"
+
+      - name: Upload this chip's outputs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: golden-outputs
+          path: ${{ runner.temp }}/golden-outputs
+          if-no-files-found: ignore
 
       - name: Other model servers' API tests
         if: ${{ always() }}
