@@ -23,7 +23,7 @@ SegmentSpeech(const SileroVAD &vad, const std::vector<float> &samples,
       static_cast<float>(block_samples) / static_cast<float>(kSampleRate);
   const int block_count =
       static_cast<int>(chunk_probabilities.size() / kChunksPerBlock);
-  // A block is speech unless every one of its chunks is silent.
+  // Note (khazic): a block is speech unless every one of its chunks is silent.
   std::vector<float> block_probabilities(block_count);
   for (int block = 0; block < block_count; ++block) {
     float silence = 1.0f;
@@ -37,7 +37,8 @@ SegmentSpeech(const SileroVAD &vad, const std::vector<float> &samples,
   };
   const int speech_pad_blocks =
       std::max(0, static_cast<int>(blocks_of(config.speech_pad_milliseconds)));
-  // Minimum durations round up: 500 ms takes two blocks, not one.
+  // Note (khazic): minimum durations round up: 500 ms takes two blocks, not
+  // one.
   const int min_speech_blocks = std::max(
       1,
       static_cast<int>(std::ceil(blocks_of(config.min_speech_milliseconds))));
@@ -78,8 +79,8 @@ SegmentSpeech(const SileroVAD &vad, const std::vector<float> &samples,
   } else {
   }
 
-  // Runs closer than the merge gap join while they fit one chunk; longer
-  // runs split at the chunk length.
+  // Note (khazic): runs closer than the merge gap join while they fit one
+  // chunk; longer runs split at the chunk length.
   const size_t max_chunk_samples = static_cast<size_t>(
       std::max(1, static_cast<int>(config.max_chunk_seconds *
                                    static_cast<float>(kSampleRate))));

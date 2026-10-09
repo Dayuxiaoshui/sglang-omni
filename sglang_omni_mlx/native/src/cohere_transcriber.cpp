@@ -100,7 +100,8 @@ std::string LanguageCode(const std::string &language) {
   return found == table.end() ? "en" : found->second;
 }
 
-// Strict UTF-8, as the Swift port's String(bytes:encoding:) accepts it.
+// Note (khazic): strict UTF-8, as the Swift port's String(bytes:encoding:)
+// accepts it.
 bool IsValidUtf8(const std::string &bytes) {
   size_t i = 0;
   const auto byte = [&](size_t k) { return static_cast<uint8_t>(bytes[k]); };
@@ -225,7 +226,8 @@ CohereTranscriber::CohereTranscriber(
           piece_reader.Skip(field & 7);
         }
       }
-      // A piece without text is dropped, and later ids shift down.
+      // Note (khazic): a piece without text is dropped, and later ids shift
+      // down.
       if (piece.has_value()) {
         if (type == kControlPiece || type == kUnusedPiece) {
           special_ids_.insert(static_cast<int>(pieces_.size()));
@@ -253,7 +255,8 @@ std::string
 CohereTranscriber::DecodeText(const std::vector<int> &token_ids) const {
   std::string text;
   std::string pending_bytes;
-  // Byte pieces gather into a run, kept only when it is valid UTF-8.
+  // Note (khazic): byte pieces gather into a run, kept only when it is valid
+  // UTF-8.
   const auto flush = [&]() {
     if (!pending_bytes.empty() && IsValidUtf8(pending_bytes)) {
       text += pending_bytes;
@@ -283,7 +286,7 @@ CohereTranscriber::DecodeText(const std::vector<int> &token_ids) const {
     text += piece;
   }
   flush();
-  // The word boundary marker U+2581 becomes a space.
+  // Note (khazic): the word boundary marker U+2581 becomes a space.
   static const std::string kWordBoundary = "\xE2\x96\x81";
   std::string spaced;
   size_t start = 0;
@@ -337,8 +340,8 @@ CohereTranscriber::TranscribeChunk(const std::vector<float> &samples,
     } else {
     }
     const mx::array current = token;
-    // Queue the next step before reading this token, so the GPU decodes while
-    // the end of text is checked.
+    // Note (khazic): queue the next step before reading this token, so the GPU
+    // decodes while the end of text is checked.
     if (step + 1 < token_budget) {
       token = next_token(model_.Decode(mx::reshape(current, {1, 1}),
                                        prompt_length + step, encoder_states,
@@ -362,8 +365,9 @@ qwen3_asr::TranscriptionResult
 CohereTranscriber::Transcribe(const std::vector<float> &samples,
                               const CohereOptions &options,
                               const std::atomic<bool> &cancel) const {
-  // Context, transcript start, emotion, the language twice, punctuation, no
-  // inverse text normalization, no timestamps and no diarization.
+  // Note (khazic): context, transcript start, emotion, the language twice,
+  // punctuation, no inverse text normalization, no timestamps and no
+  // diarization.
   const std::string language = LanguageCode(options.language);
   const std::string language_token = "<|" + language + "|>";
   std::vector<int> prompt_ids;
@@ -386,7 +390,8 @@ CohereTranscriber::Transcribe(const std::vector<float> &samples,
       static_cast<size_t>(options.min_chunk_duration_seconds *
                           static_cast<float>(qwen3_asr::kSampleRate));
   qwen3_asr::TranscriptionResult result;
-  // The language actually decoded: an unknown one decodes as English.
+  // Note (khazic): the language actually decoded: an unknown one decodes as
+  // English.
   result.language = language;
   result.finish_reason = qwen3_asr::FinishReason::kStop;
   const bool cuts_at_speech = options.voice_activity_detector != nullptr;
@@ -400,8 +405,9 @@ CohereTranscriber::Transcribe(const std::vector<float> &samples,
       break;
     } else {
     }
-    // Of several energy-cut chunks, one shorter than the minimum is padded
-    // with silence; speech segments and a single chunk are decoded as cut.
+    // Note (khazic): of several energy-cut chunks, one shorter than the minimum
+    // is padded with silence; speech segments and a single chunk are decoded as
+    // cut.
     std::vector<float> chunk(samples.begin() + start, samples.begin() + end);
     if (!cuts_at_speech && chunks.size() > 1 &&
         chunk.size() < min_chunk_samples) {

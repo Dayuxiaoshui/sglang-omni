@@ -23,12 +23,13 @@ constexpr float kLayerNormEpsilon = 1e-5f;
 constexpr float kBatchNormEpsilon = 1e-5f;
 constexpr float kNormalizationEpsilon = 1e-5f;
 constexpr int kSubsamplingStride = 2;
-// The decoder's additive causal mask value.
+// Note (khazic): the decoder's additive causal mask value.
 constexpr float kMaskedScore = -1e9f;
 
 // The symmetric Hann window of kWindowLength, centered in kFftSize zeros.
 mx::array CenteredHannWindow() {
-  // Swift's Float.pi: pi rounded toward zero, one step below (float)M_PI.
+  // Note (khazic): Swift's Float.pi: pi rounded toward zero, one step below
+  // (float)M_PI.
   const float swift_pi = std::nextafter(static_cast<float>(M_PI), 0.0f);
   const float denominator = static_cast<float>(kWindowLength - 1);
   std::vector<float> window(kFftSize, 0.0f);
@@ -153,7 +154,7 @@ CohereModel::CohereModel(const std::filesystem::path &model_directory)
         continue;
       } else {
       }
-      // encoder.subsampling.conv.N. is the subsampling's convN.
+      // Note (khazic): encoder.subsampling.conv.N. is the subsampling's convN.
       std::string name = raw_name;
       const std::string subsampling_prefix = "encoder.subsampling.conv.";
       if (name.rfind(subsampling_prefix, 0) == 0) {
@@ -161,8 +162,9 @@ CohereModel::CohereModel(const std::filesystem::path &model_directory)
             "encoder.subsampling.conv" + name.substr(subsampling_prefix.size());
       } else {
       }
-      // Channels-first convolution weights move their channels last: a
-      // subsampling kernel is 3x3, or 1x1 for the pointwise conv3 and conv6.
+      // Note (khazic): channels-first convolution weights move their channels
+      // last: a subsampling kernel is 3x3, or 1x1 for the pointwise conv3 and
+      // conv6.
       const bool is_weight =
           name.size() > 7 && name.compare(name.size() - 7, 7, ".weight") == 0;
       const int subsampling_kernel =
@@ -240,8 +242,8 @@ mx::array CohereModel::Conv2d(const mx::array &x, const std::string &prefix,
 }
 
 mx::array CohereModel::RelativePositions(int length, mx::Dtype dtype) const {
-  // Relative positions from length - 1 down to -(length - 1), from the table
-  // built at load, or for longer input a table of its own.
+  // Note (khazic): relative positions from length - 1 down to -(length - 1),
+  // from the table built at load, or for longer input a table of its own.
   const mx::array table =
       mx::astype(length <= config_.relative_position_count
                      ? relative_position_table_
@@ -271,8 +273,8 @@ mx::array CohereModel::EncoderSelfAttention(const mx::array &x,
   mx::array position_scores = mx::matmul(
       mx::add(queries, mx::expand_dims(Weight(prefix + ".pos_bias_v"), {0, 2})),
       mx::transpose(projected_positions, {0, 1, 3, 2}));
-  // Relative shift: row i of [length, 2 * length - 1] scores moves left by
-  // length - 1 - i, so column j is relative position j - i.
+  // Note (khazic): relative shift: row i of [length, 2 * length - 1] scores
+  // moves left by length - 1 - i, so column j is relative position j - i.
   const int length = position_scores.shape(2);
   const int position_count = position_scores.shape(3);
   position_scores = mx::pad(position_scores, {{0, 0}, {0, 0}, {0, 0}, {1, 0}});
@@ -303,7 +305,8 @@ mx::array CohereModel::EncoderConvolution(const mx::array &x,
   hidden =
       Conv1d(hidden, prefix + ".depthwise_conv",
              (config_.convolution_kernel_size - 1) / 2, config_.encoder_width);
-  // Batch norm with its running statistics; eps takes the statistics' dtype.
+  // Note (khazic): batch norm with its running statistics; eps takes the
+  // statistics' dtype.
   const mx::array &variance = Weight(prefix + ".batch_norm.running_var");
   hidden = mx::multiply(
       mx::subtract(hidden, Weight(prefix + ".batch_norm.running_mean")),
@@ -356,7 +359,8 @@ mx::array CohereModel::Encode(const std::vector<float> &samples) const {
                           mx::slice(audio, {0}, {sample_count - 1})))});
   } else {
   }
-  // Centered frames over zero padding of half an FFT on each side.
+  // Note (khazic): centered frames over zero padding of half an FFT on each
+  // side.
   const mx::array padding = mx::zeros({kFftSize / 2}, mx::float32);
   const mx::array padded = mx::concatenate({padding, emphasized, padding});
   const int frame_count = 1 + (padded.shape(0) - kFftSize) / kHopLength;
@@ -367,14 +371,14 @@ mx::array CohereModel::Encode(const std::vector<float> &samples) const {
   mx::array mel = mx::log(mx::add(mx::matmul(power, mel_filters_),
                                   mx::array(std::ldexp(1.0f, -24))));
   mel = mx::expand_dims(mx::transpose(mel, {1, 0}), 0);
-  // Per-feature normalization over time.
+  // Note (khazic): per-feature normalization over time.
   const mx::array mean = mx::mean(mel, std::vector<int>{2}, true);
   const mx::array deviation =
       mx::add(mx::sqrt(mx::var(mel, std::vector<int>{2}, true)),
               mx::array(kNormalizationEpsilon));
   const mx::array features = mx::divide(mx::subtract(mel, mean), deviation);
 
-  // Subsampling on [batch, frames, mel_bins, 1] images.
+  // Note (khazic): subsampling on [batch, frames, mel_bins, 1] images.
   const std::string prefix = "encoder.subsampling.";
   const int channels = Weight(prefix + "conv0.bias").shape(0);
   mx::array x = mx::expand_dims(mx::transpose(features, {0, 2, 1}), -1);

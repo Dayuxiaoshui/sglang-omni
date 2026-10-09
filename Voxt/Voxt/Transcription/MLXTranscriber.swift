@@ -1774,7 +1774,7 @@ class MLXTranscriber: ObservableObject, TranscriberProtocol {
         }
         let modelDirectory = try await SileroVADModelProvisioner.shared.ensureModelDirectory()
         try Task.checkCancellation()
-        // The server returns no text for audio without speech, as this config's
+        // Note (khazic): the server returns no text for audio without speech, as this config's
         // no-speech policy asks.
         let config = Self.longFormSpeechSegmentConfig(
             chunkMaximumDurationSeconds: senseVoiceChunkMaximumDurationSeconds,

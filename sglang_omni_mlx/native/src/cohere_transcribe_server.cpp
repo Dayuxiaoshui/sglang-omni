@@ -107,8 +107,8 @@ public:
             vad_directory](const std::atomic<bool> &cancel) mutable {
       if (vad_directory.has_value()) {
         if (detector_ == nullptr || detector_directory_ != *vad_directory) {
-          // The old model goes before the new one loads, so two never
-          // sit in memory together.
+          // Note (khazic): the old model goes before the new one loads, so two
+          // never sit in memory together.
           detector_.reset();
           detector_ = std::make_unique<silero_vad::SileroVAD>(*vad_directory);
           detector_directory_ = *vad_directory;
@@ -123,9 +123,9 @@ public:
 
 private:
   cohere_transcribe::CohereTranscriber transcriber_;
-  // The Silero VAD of the last directory a request named, loaded on first
-  // use and touched on the worker thread only: one model at most, since
-  // Voxt sends the same directory every time.
+  // Note (khazic): the Silero VAD of the last directory a request named, loaded
+  // on first use and touched on the worker thread only: one model at most,
+  // since Voxt sends the same directory every time.
   mutable std::unique_ptr<silero_vad::SileroVAD> detector_;
   mutable std::string detector_directory_;
 };
