@@ -40,10 +40,9 @@ TOLERANCE = GOLDEN["tolerance"]
 SPEAKERS = 4
 # Clips of the golden file, so the original's outputs are known.
 CLIP = "0064_en_mid"
-# The longest feed a stream takes: one frame short of the checkpoint's speaker
-# cache update period (188 frames of 1,280 samples), so each feed's frames can
-# leave the FIFO in one update.
-MAX_FEED_SAMPLES = 187 * 1280
+# The longest feed a stream takes: it yields the checkpoint's 188 frame speaker
+# cache update period, and one sample more would yield 189.
+MAX_FEED_SAMPLES = 188 * 1280 - 1
 OTHER_CLIP = "0076_en_mid"
 
 
@@ -355,7 +354,8 @@ def test_invalid_options_are_refused(server: Server, query: str) -> None:
         "text audio",
         np.array([0.0, np.nan], dtype="<f4").tobytes(),
         np.zeros(480_001, dtype="<f4").tobytes(),
-        # One frame more than a feed can retire from the FIFO (188 frames).
+        # Over the sample limit: it would yield 189 frames, one more than an update
+        # retires from the FIFO.
         np.zeros(MAX_FEED_SAMPLES + 1, dtype="<f4").tobytes(),
     ],
     ids=[

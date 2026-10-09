@@ -238,9 +238,12 @@ SortformerService::SortformerService(
   const auto samples_per_frame = static_cast<size_t>(
       std::lround(model_.frame_duration() *
                   static_cast<float>(model_.config().processor.sampling_rate)));
+  // N samples give 1 + N / hop mel frames and ceil(mel / 8) frames after
+  // subsampling, so one sample less than update_period frames' worth is exact.
   max_feed_samples_ = std::min(
-      kMaxFeedSamples, static_cast<size_t>(modules.spkcache_update_period - 1) *
-                           samples_per_frame);
+      kMaxFeedSamples,
+      static_cast<size_t>(modules.spkcache_update_period) * samples_per_frame -
+          1);
 }
 
 void SortformerService::CheckStateLimits(const FeedOptions &options) const {

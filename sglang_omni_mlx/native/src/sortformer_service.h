@@ -41,9 +41,8 @@ public:
   std::map<std::string, int> RequestStates() const;
 
   StreamingState NewStream() const { return model_.InitStreamingState(); }
-  // The longest feed: one frame short of the speaker cache update period, so
-  // a feed's frames leave the FIFO in one update and the FIFO stays within
-  // fifo_max however many feeds come.
+  // The longest feed that yields at most spkcache_update_period frames, so one
+  // update retires them and the FIFO stays within fifo_max.
   size_t MaxFeedSamples() const { return max_feed_samples_; }
   // Throws std::invalid_argument when the speaker cache, the FIFO, the left
   // context and the longest feed would not fit the transformer's positions.
