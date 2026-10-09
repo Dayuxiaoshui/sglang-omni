@@ -18,6 +18,7 @@
 
 #include "audio.h"
 #include "civetweb.h"
+#include "http.h"
 #include "nlohmann/json.hpp"
 #include "worker.h"
 
@@ -26,7 +27,10 @@ namespace asr_service {
 namespace {
 
 namespace mx = mlx::core;
-using Json = nlohmann::ordered_json;
+using omni_server::BadRequest;
+using omni_server::Json;
+using omni_server::ReadBody;
+using omni_server::WriteJson;
 using qwen3_asr::CancelFlag;
 using qwen3_asr::TranscriptionResult;
 using qwen3_asr::TranscriptionWorker;
@@ -39,34 +43,10 @@ struct ServerState {
   std::string model_name;
 };
 
-void WriteResponse(mg_connection *connection, int status,
-                   const std::string &reason, const std::string &content_type,
-                   const std::string &body) {
-  mg_printf(connection,
-            "HTTP/1.1 %d %s\r\nContent-Type: %s\r\nContent-Length: "
-            "%zu\r\nConnection: close\r\n\r\n",
-            status, reason.c_str(), content_type.c_str(), body.size());
-  mg_write(connection, body.data(), body.size());
-}
-
-int WriteJson(mg_connection *connection, int status, const Json &body) {
-  WriteResponse(connection, status,
-                status == 200   ? "OK"
-                : status == 400 ? "Bad Request"
-                : status == 405 ? "Method Not Allowed"
-                                : "Internal Server Error",
-                "application/json", body.dump());
-  return status;
-}
-
-int BadRequest(mg_connection *connection, const std::string &detail) {
-  return WriteJson(connection, 400, {{"detail", detail}});
-}
-
 int HandleHealth(mg_connection *connection, void *data) {
   const auto *state = static_cast<ServerState *>(data);
   Json states = Json::object();
-  for (const auto &[name, count] : state->worker->RequestStates())
+  for (const auto &[name, count] : state->model->RequestStates(*state->worker))
     states[name] = count;
   return WriteJson(
       connection, 200,
@@ -79,16 +59,6 @@ int HandleModels(mg_connection *connection, void *data) {
                    {{"object", "list"},
                     {"data", Json::array({{{"id", state->model_name},
                                            {"object", "model"}}})}});
-}
-
-std::string ReadBody(mg_connection *connection) {
-  std::string body;
-  char buffer[65536];
-  int read = 0;
-  while ((read = mg_read(connection, buffer, sizeof(buffer))) > 0) {
-    body.append(buffer, static_cast<size_t>(read));
-  }
-  return body;
 }
 
 Json DoneEvent(const TranscriptionResult &result,
@@ -121,8 +91,7 @@ bool WriteSse(mg_connection *connection, const std::string &payload) {
 
 int HandleTranscriptions(mg_connection *connection, void *data) {
   const auto *state = static_cast<ServerState *>(data);
-  const mg_request_info *request = mg_get_request_info(connection);
-  if (std::strcmp(request->request_method, "POST") != 0) {
+  if (!omni_server::IsPost(connection)) {
     return WriteJson(connection, 405, {{"detail", "Method Not Allowed"}});
   } else {
   }
@@ -211,6 +180,7 @@ void Emit(const Json &event) {
 }
 
 struct Arguments {
+  const ServedKind *kind = nullptr;
   std::string model_path;
   std::string model_name;
   std::string host = "127.0.0.1";
@@ -218,9 +188,58 @@ struct Arguments {
   bool supervised = false;
 };
 
-Arguments ParseArguments(int argc, char **argv, const ServedKind &kind) {
+// The kind the last --model-kind names, the first by default; nullptr for
+// another. Every flag but --supervised takes a value, which is skipped.
+const ServedKind *NamedKind(int argc, char **argv,
+                            const std::vector<ServedKind> &kinds) {
+  std::optional<std::string> name;
+  for (int i = 1; i + 1 < argc; ++i) {
+    const std::string flag = argv[i];
+    if (flag == "--supervised") {
+      continue;
+    } else if (flag == "--model-kind") {
+      name = argv[i + 1];
+    } else {
+    }
+    ++i;
+  }
+  if (!name.has_value()) {
+    return &kinds.front();
+  } else {
+  }
+  for (const ServedKind &kind : kinds) {
+    if (kind.model_kind == *name) {
+      return &kind;
+    } else {
+    }
+  }
+  return nullptr;
+}
+
+std::string KindNames(const std::vector<ServedKind> &kinds) {
+  std::string names;
+  for (size_t i = 0; i < kinds.size(); ++i) {
+    names += (i == 0                  ? ""
+              : i + 1 == kinds.size() ? " or "
+                                      : ", ") +
+             kinds[i].model_kind;
+  }
+  return names;
+}
+
+Arguments ParseArguments(int argc, char **argv,
+                         const std::vector<ServedKind> &kinds) {
+  const ServedKind *named = NamedKind(argc, argv, kinds);
+  if (named == nullptr) {
+    throw std::invalid_argument(
+        kinds.size() == 1
+            ? "only --model-kind " + kinds.front().model_kind + " is served"
+            : "--model-kind must be " + KindNames(kinds));
+  } else {
+  }
+  const ServedKind &kind = *named;
   Arguments arguments;
-  std::string model_kind = kind.model_kind;
+  arguments.kind = named;
   for (int i = 1; i < argc; ++i) {
     const std::string flag = argv[i];
     const auto value = [&]() -> std::string {
@@ -241,7 +260,7 @@ Arguments ParseArguments(int argc, char **argv, const ServedKind &kind) {
     } else if (flag == "--supervised") {
       arguments.supervised = true;
     } else if (flag == "--model-kind") {
-      model_kind = value();
+      value(); // Note (khazic): NamedKind already read it.
     } else if (flag == "--startup-timeout-s") {
       value(); // Note (Jiaxin Deng): Voxt passes it; unused here.
     } else if (kind.flags.count(flag) != 0) {
@@ -250,10 +269,7 @@ Arguments ParseArguments(int argc, char **argv, const ServedKind &kind) {
       throw std::invalid_argument("unknown argument " + flag);
     }
   }
-  if (model_kind != kind.model_kind) {
-    throw std::invalid_argument("only --model-kind " + kind.model_kind +
-                                " is served");
-  } else if (arguments.model_path.empty()) {
+  if (arguments.model_path.empty()) {
     throw std::invalid_argument("--model-path is required");
   } else if (kind.check_flags) {
     kind.check_flags();
@@ -296,12 +312,7 @@ private:
 
 std::optional<std::string> TextField(const FormFields &form,
                                      const std::string &name) {
-  const auto found = form.find(name);
-  if (found == form.end()) {
-    return std::nullopt;
-  } else {
-    return found->second.value;
-  }
+  return omni_server::Field(form, name);
 }
 
 std::optional<int> IntegerField(const FormFields &form,
@@ -346,7 +357,7 @@ std::optional<float> NumberField(const FormFields &form,
   return value;
 }
 
-int Serve(int argc, char **argv, const ServedKind &kind) {
+int Serve(int argc, char **argv, const std::vector<ServedKind> &kinds) {
   const auto started = std::chrono::steady_clock::now();
   // Note (Jiaxin Deng): stop signals go to one waiting thread, not to
   // whichever thread happens to run.
@@ -359,7 +370,7 @@ int Serve(int argc, char **argv, const ServedKind &kind) {
 
   Arguments arguments;
   try {
-    arguments = ParseArguments(argc, argv, kind);
+    arguments = ParseArguments(argc, argv, kinds);
   } catch (const std::exception &error) {
     std::cerr << argv[0] << ": " << error.what() << "\n";
     return 2;
@@ -395,7 +406,7 @@ int Serve(int argc, char **argv, const ServedKind &kind) {
   std::thread loader([&]() {
     try {
       worker = std::make_unique<TranscriptionWorker>(
-          [&]() { model = kind.load(arguments.model_path); });
+          [&]() { model = arguments.kind->load(arguments.model_path); });
       loaded.store(true);
     } catch (const std::exception &error) {
       if (arguments.supervised) {
@@ -427,10 +438,12 @@ int Serve(int argc, char **argv, const ServedKind &kind) {
   mg_init_library(0);
   const std::string listening =
       arguments.host + ":" + std::to_string(arguments.port);
+  // Note (Jiaxin Deng): each open WebSocket keeps a civetweb worker thread
+  // and Voxt opens a VAD stream per stream ID: allow far more than it uses.
   const char *options[] = {"listening_ports",
                            listening.c_str(),
                            "num_threads",
-                           "16",
+                           "64",
                            "request_timeout_ms",
                            "3600000",
                            "websocket_timeout_ms",
@@ -454,8 +467,11 @@ int Serve(int argc, char **argv, const ServedKind &kind) {
       arguments.host + ":" + std::to_string(server_port.port);
   mg_set_request_handler(context, "/health$", HandleHealth, &state);
   mg_set_request_handler(context, "/v1/models$", HandleModels, &state);
-  mg_set_request_handler(context, "/v1/audio/transcriptions$",
-                         HandleTranscriptions, &state);
+  if (model->Transcribes()) {
+    mg_set_request_handler(context, "/v1/audio/transcriptions$",
+                           HandleTranscriptions, &state);
+  } else {
+  }
   model->AddHandlers(context, *worker);
   const double startup_seconds =
       std::chrono::duration<double>(std::chrono::steady_clock::now() - started)

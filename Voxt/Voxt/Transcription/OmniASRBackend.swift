@@ -25,6 +25,8 @@ nonisolated enum LoadedASRModel: @unchecked Sendable {
 nonisolated enum OmniASRBackend {
     static let modelKindsByRepo: [String: OmniASRModelKind] = [
         "mlx-community/Qwen3-ASR-0.6B-4bit": .qwen3ASR,
+        "mlx-community/Qwen3-ASR-1.7B-6bit": .qwen3ASR,
+        "mlx-community/Qwen3-ASR-1.7B-8bit": .qwen3ASR,
         "mlx-community/whisper-large-v3-turbo": .whisper,
     ]
 
@@ -48,11 +50,11 @@ nonisolated enum OmniASRBackend {
         return modelKindsByRepo[repo]
     }
 
-    /// Qwen3-ASR runs `VOXT_OMNI_RUNTIME`; every other kind runs the
-    /// `<kind>_server` installed beside it.
+    /// Qwen3-ASR, Silero VAD and Sortformer run `VOXT_OMNI_RUNTIME`; every other
+    /// kind runs the `<kind>_server` installed beside it.
     static func runtimeExecutable(for kind: OmniASRModelKind, qwenRuntime: URL) -> URL {
         switch kind {
-        case .qwen3ASR:
+        case .qwen3ASR, .sileroVAD, .sortformer:
             return qwenRuntime
         case .whisper:
             return qwenRuntime.deletingLastPathComponent().appendingPathComponent("\(kind.rawValue)_server")
