@@ -26,8 +26,15 @@ constexpr size_t kLocalFileHeaderSize = 30;
 constexpr uint16_t kZip64ExtraFieldId = 0x0001;
 constexpr uint32_t kZip64Deferred = 0xFFFFFFFF;
 
+// A little-endian integer inside bytes; a field past the end means the
+// archive's records lie about their sizes.
 template <typename Integer>
 Integer ReadLittleEndian(const std::vector<char> &bytes, size_t offset) {
+  if (offset > bytes.size() || bytes.size() - offset < sizeof(Integer)) {
+    throw std::runtime_error(
+        "corrupt .npz archive: a record runs past its end");
+  } else {
+  }
   Integer value = 0;
   std::memcpy(&value, bytes.data() + offset, sizeof(value));
   return value;
@@ -109,6 +116,10 @@ std::unordered_map<std::string, mx::array>
 Load(const std::filesystem::path &path) {
   const auto archive = std::make_shared<const ArchiveFile>(path);
   const size_t file_size = std::filesystem::file_size(path);
+  if (file_size < kEndOfCentralDirectorySize) {
+    throw std::runtime_error(path.string() + " is not an .npz archive");
+  } else {
+  }
   // The end record is the archive's last 22 bytes: numpy writes no comment.
   const std::vector<char> end_record = archive->ReadRange(
       file_size - kEndOfCentralDirectorySize, kEndOfCentralDirectorySize);
@@ -118,6 +129,8 @@ Load(const std::filesystem::path &path) {
     throw std::runtime_error(path.string() + " is not an .npz archive");
   } else if (directory_offset == kZip64Deferred) {
     throw std::runtime_error(path.string() + " is a ZIP64 archive");
+  } else if (directory_offset > file_size - kEndOfCentralDirectorySize) {
+    throw std::runtime_error(path.string() + " has a corrupt directory");
   } else {
   }
   const uint16_t entry_count = ReadLittleEndian<uint16_t>(end_record, 10);
@@ -127,6 +140,7 @@ Load(const std::filesystem::path &path) {
   std::unordered_map<std::string, mx::array> arrays;
   size_t entry_offset = 0;
   for (uint16_t entry = 0; entry < entry_count; ++entry) {
+    // Also keeps the name check below from underflowing.
     if (entry_offset + kCentralDirectoryEntrySize > directory.size() ||
         ReadLittleEndian<uint32_t>(directory, entry_offset) !=
             kCentralDirectoryEntrySignature) {
@@ -140,6 +154,11 @@ Load(const std::filesystem::path &path) {
         ReadLittleEndian<uint32_t>(directory, entry_offset + 42);
     const uint16_t name_length =
         ReadLittleEndian<uint16_t>(directory, entry_offset + 28);
+    if (directory.size() - entry_offset - kCentralDirectoryEntrySize <
+        name_length) {
+      throw std::runtime_error(path.string() + " has a corrupt directory");
+    } else {
+    }
     const std::string name(directory.data() + entry_offset +
                                kCentralDirectoryEntrySize,
                            name_length);
@@ -166,6 +185,10 @@ Load(const std::filesystem::path &path) {
         if (ReadLittleEndian<uint32_t>(directory, entry_offset + 20) ==
             kZip64Deferred) {
           value_offset += 8;
+        } else {
+        }
+        if (value_offset + 8 > extra_field_offset + 4 + field_size) {
+          throw std::runtime_error(path.string() + " has a corrupt directory");
         } else {
         }
         local_header_offset =
