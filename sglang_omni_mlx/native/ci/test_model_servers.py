@@ -31,22 +31,9 @@ class ModelServer(Server):
     """Another model's server binary, started and spoken to as qwen3_asr_server is."""
 
     def __init__(self, binary: str, model_kind: str, repo: str) -> None:
-        self.process = subprocess.Popen(
-            [
-                str(Path(RUNTIME_BIN) / binary),
-                "--supervised",
-                "--model-kind",
-                model_kind,
-                "--model-directory",
-                str(Path(DATA_ROOT) / "models" / repo.replace("/", "_")),
-            ],  # fmt: skip
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
+        super().__init__(
+            binary, model_kind, Path(DATA_ROOT) / "models" / repo.replace("/", "_")
         )
-        self.ready = json.loads(self.process.stdout.readline())
-        self.port = self.ready.get("port")
 
 
 @pytest.fixture(scope="module")
@@ -114,6 +101,9 @@ def test_whisper_plain_request_returns_json_text(whisper_server: ModelServer) ->
         ({"include_generation_metadata": "true"}, "wav"),
         ({"max_new_tokens": "many"}, "wav"),
         ({"temperature": "warm"}, "wav"),
+        ({"temperature": "nan"}, "wav"),
+        ({"temperature": "inf"}, "wav"),
+        ({"temperature": "-1"}, "wav"),
     ],
 )
 def test_whisper_invalid_requests_are_rejected(
@@ -124,6 +114,38 @@ def test_whisper_invalid_requests_are_rejected(
     )
     assert status == 400
     assert "detail" in json.loads(body)
+
+
+def test_whisper_bad_number_error_names_its_field(whisper_server: ModelServer) -> None:
+    status, body = whisper_server.post_form(
+        {"max_new_tokens": "many"}, clip("0006_en_short")
+    )
+    assert status == 400
+    assert "max_new_tokens" in json.loads(body)["detail"]
+
+
+def test_whisper_language_with_a_truncated_utf8_sequence_is_unknown(
+    whisper_server: ModelServer,
+) -> None:
+    boundary = uuid.uuid4().hex
+    body = (
+        f'--{boundary}\r\nContent-Disposition: form-data; name="language"\r\n\r\n'.encode()
+        + b"en\xf0\r\n"
+        + f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="a.wav"\r\n\r\n'.encode()
+        + clip("0006_en_short")
+        + f"\r\n--{boundary}--\r\n".encode()
+    )
+    status, response = whisper_server.request(
+        "POST",
+        "/v1/audio/transcriptions",
+        body,
+        {"Content-Type": f"multipart/form-data; boundary={boundary}"},
+    )
+    # An unknown language sends no language token, as Swift does; the
+    # truncated sequence must not be read past.
+    assert status == 200
+    assert "text" in json.loads(response)
+    assert whisper_server.request("GET", "/health")[0] == 200
 
 
 def test_whisper_disconnected_stream_stops_its_decode(
