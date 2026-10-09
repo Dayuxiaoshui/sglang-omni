@@ -248,6 +248,12 @@ actor SortformerMeetingSpeakerDiarizationEngine: MeetingSpeakerDiarizationEngine
             threshold: 0.5, minDuration: 0, mergeGap: 0.18,
             spkcacheMax: policy.cacheMaximumFrames, fifoMax: MeetingSpeakerFeedPolicy.fifoMaximumFrames
         )
+        // The server refuses these limits at the handshake, which reads as a transport failure.
+        let encoderFrames = max(options.spkcacheMax, config.modulesConfig.spkcacheLen) + options.fifoMax
+            + config.modulesConfig.chunkLeftContext + config.modulesConfig.spkcacheUpdatePeriod
+        guard encoderFrames <= config.tfEncoderConfig.maxSourcePositions else {
+            throw MeetingSpeakerFeedError.invalidConfiguration
+        }
         var stream = OmniDiarizationStream(endpoint: endpoint, options: options)
         var state = (fifo: 0, cache: 0, frames: 0)
         var previousDescriptor: MeetingAudioAssetDescriptor?
