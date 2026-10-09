@@ -226,9 +226,9 @@ extension MLXTranscriber {
                 minChunkDuration: parameters.minChunkDuration,
                 speechSegments: speechSegments
             )).text
-        case .sileroVAD:
-            // Note (khazic): a Silero VAD server is never a loaded ASR model.
-            preconditionFailure("a Silero VAD server transcribes nothing")
+        case .sileroVAD, .sortformer:
+            // Note (khazic): a Silero VAD or Sortformer server is never a loaded ASR model.
+            preconditionFailure("a Silero VAD or Sortformer server transcribes nothing")
         }
         // Note (khazic): chunk and window segments have chunk timing, which Voxt discards.
         return MLXDetachedInferenceResult(rawText: text, senseVoiceMetadata: nil, structuredSegments: [])

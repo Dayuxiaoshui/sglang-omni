@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Native MLX server for Voxt, one model per process on asr_service:
 // qwen3_asr (the API of sglang_omni_mlx.qwen3_asr.server, with the realtime
-// API on /v1/realtime) or silero_vad (vad_service.h's API, no transcriptions).
+// API on /v1/realtime), silero_vad (vad_service.h's API, no transcriptions) or
+// sortformer (sortformer_service.h's API, no transcriptions).
 #include <iostream>
 #include <limits>
 #include <memory>
@@ -13,6 +14,7 @@
 #include "civetweb.h"
 #include "nlohmann/json.hpp"
 #include "realtime.h"
+#include "sortformer_service.h"
 #include "vad_service.h"
 
 namespace {
@@ -174,6 +176,31 @@ private:
   silero_vad::VADService service_;
 };
 
+class SortformerModel : public asr_service::ServedModel {
+public:
+  explicit SortformerModel(const std::filesystem::path &model_directory)
+      : service_(model_directory) {
+    mlx::core::set_cache_limit(0);
+  }
+
+  asr_service::Transcription
+  Prepare(std::vector<float>, const asr_service::FormFields &) const override {
+    throw std::logic_error("sortformer serves no transcriptions");
+  }
+  bool Transcribes() const override { return false; }
+  std::map<std::string, int>
+  RequestStates(const qwen3_asr::TranscriptionWorker &) const override {
+    return service_.RequestStates();
+  }
+  void AddHandlers(mg_context *context,
+                   qwen3_asr::TranscriptionWorker &) override {
+    service_.Register(context);
+  }
+
+private:
+  sortformer::SortformerService service_;
+};
+
 } // namespace
 
 int main(int argc, char **argv) {
@@ -214,11 +241,16 @@ int main(int argc, char **argv) {
         qwen3_asr::MakeRealtimeSettings(decode_interval_ms, first_decode_ms,
                                         max_segment_seconds));
   };
-  // Note (khazic): Voxt passes the realtime flags to either kind.
+  // Note (khazic): Voxt passes the realtime flags to every kind.
   asr_service::ServedKind silero_vad = qwen3_asr;
   silero_vad.model_kind = "silero_vad";
   silero_vad.load = [](const std::filesystem::path &model_directory) {
     return std::make_unique<SileroVADModel>(model_directory);
   };
-  return asr_service::Serve(argc, argv, {qwen3_asr, silero_vad});
+  asr_service::ServedKind sortformer = qwen3_asr;
+  sortformer.model_kind = "sortformer";
+  sortformer.load = [](const std::filesystem::path &model_directory) {
+    return std::make_unique<SortformerModel>(model_directory);
+  };
+  return asr_service::Serve(argc, argv, {qwen3_asr, silero_vad, sortformer});
 }

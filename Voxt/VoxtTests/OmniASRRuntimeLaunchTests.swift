@@ -35,6 +35,8 @@ final class OmniASRRuntimeLaunchTests: XCTestCase {
         let qwenRuntime = URL(fileURLWithPath: "/opt/voxt/bin/qwen3_asr_server")
 
         XCTAssertEqual(OmniASRBackend.runtimeExecutable(for: .qwen3ASR, qwenRuntime: qwenRuntime), qwenRuntime)
+        XCTAssertEqual(OmniASRBackend.runtimeExecutable(for: .sileroVAD, qwenRuntime: qwenRuntime), qwenRuntime)
+        XCTAssertEqual(OmniASRBackend.runtimeExecutable(for: .sortformer, qwenRuntime: qwenRuntime), qwenRuntime)
         XCTAssertEqual(
             OmniASRBackend.runtimeExecutable(for: .whisper, qwenRuntime: qwenRuntime).path,
             "/opt/voxt/bin/whisper_server"

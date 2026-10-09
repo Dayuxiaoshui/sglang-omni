@@ -3,7 +3,7 @@
 
 Greedy decoding follows each Apple chip's GPU arithmetic, so a golden file keeps
 exact outputs per chip; other chips are gated on error rates within tolerance.
-Silero VAD golden files are checked within kernel tolerances (vad_golden.py).
+Silero VAD and Sortformer golden files are checked within kernel tolerances.
 """
 
 from __future__ import annotations
@@ -21,6 +21,7 @@ from typing import Callable
 # (runtime bin, data root, golden file, manifest of the clips to run) -> outputs
 TranscribeCorpus = Callable[[Path, Path, dict, dict[str, dict]], dict[str, dict]]
 
+import sortformer_golden
 import vad_golden
 
 CI_DIRECTORY = Path(__file__).resolve().parent
@@ -243,6 +244,10 @@ def run(transcribe_corpus: TranscribeCorpus) -> None:
             *vad_golden.check(
                 golden, arguments.runtime_bin, arguments.data_root, list(manifest)
             )
+        )
+    elif golden.get("kind") == "sortformer":
+        report(
+            *sortformer_golden.check(golden, arguments.runtime_bin, arguments.data_root)
         )
     else:
         pass

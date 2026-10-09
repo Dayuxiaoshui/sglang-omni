@@ -51,11 +51,11 @@ nonisolated enum OmniASRBackend {
         return modelKindsByRepo[repo]
     }
 
-    /// Qwen3-ASR and Silero VAD run `VOXT_OMNI_RUNTIME`; every other kind runs
-    /// the `<kind>_server` installed beside it.
+    /// Qwen3-ASR, Silero VAD and Sortformer run `VOXT_OMNI_RUNTIME`; every other
+    /// kind runs the `<kind>_server` installed beside it.
     static func runtimeExecutable(for kind: OmniASRModelKind, qwenRuntime: URL) -> URL {
         switch kind {
-        case .qwen3ASR, .sileroVAD:
+        case .qwen3ASR, .sileroVAD, .sortformer:
             return qwenRuntime
         case .whisper, .cohereTranscribe:
             return qwenRuntime.deletingLastPathComponent().appendingPathComponent("\(kind.rawValue)_server")
