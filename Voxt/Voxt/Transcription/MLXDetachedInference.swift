@@ -213,6 +213,21 @@ extension MLXTranscriber {
                 maxNewTokens: parameters.maxTokens,
                 temperature: parameters.temperature
             )).text
+        case .mossTranscribeDiarize:
+            let result = try await runtime.transcribeMossFinal(
+                samples: audioSamples,
+                sampleRate: targetSampleRate,
+                prompt: inferenceConfiguration.mossPrompt,
+                maxTokens: parameters.maxTokens
+            )
+            return MLXDetachedInferenceResult(
+                rawText: MossASRTranscriptRendering.renderedText(
+                    result.text,
+                    outputMode: inferenceConfiguration.mossOutputMode
+                ),
+                senseVoiceMetadata: nil,
+                structuredSegments: mossStructuredSegments(from: result.segments.map(\.transcriptSegment))
+            )
         case .sileroVAD, .sortformer:
             // Note (khazic): a Silero VAD or Sortformer server is never a loaded ASR model.
             preconditionFailure("a Silero VAD or Sortformer server transcribes nothing")

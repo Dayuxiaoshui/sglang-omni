@@ -42,6 +42,10 @@ final class OmniASRRuntimeLaunchTests: XCTestCase {
             "/opt/voxt/bin/whisper_server"
         )
         XCTAssertEqual(OmniASRBackend.modelKindsByRepo["mlx-community/whisper-large-v3-turbo"], .whisper)
+        XCTAssertEqual(
+            OmniASRBackend.runtimeExecutable(for: .mossTranscribeDiarize, qwenRuntime: qwenRuntime).path,
+            "/opt/voxt/bin/moss_transcribe_diarize_server"
+        )
     }
 
     /// Every Qwen3-ASR checkpoint the native runtime is checked against runs on it;
