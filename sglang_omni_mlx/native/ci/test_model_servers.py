@@ -292,3 +292,23 @@ def test_cohere_voice_activity_needs_every_setting(cohere_server: ModelServer) -
     status, body = cohere_server.post_form(fields, clip("0006_en_short"))
     assert status == 400
     assert "vad_threshold" in json.loads(body)["detail"]
+
+
+def test_cohere_reports_the_language_it_decoded(cohere_server: ModelServer) -> None:
+    status, body = cohere_server.post_form(
+        {"language": "fr-FR", "stream": "true", "include_generation_metadata": "true"},
+        clip("0006_en_short"),
+    )
+    assert status == 200
+    assert sse_events(body)[0]["generation_metadata"]["language"] == "en"
+
+
+@pytest.mark.parametrize("temperature", ["nan", "-1"])
+def test_cohere_rejects_a_bad_temperature(
+    cohere_server: ModelServer, temperature: str
+) -> None:
+    status, body = cohere_server.post_form(
+        {"temperature": temperature}, clip("0006_en_short")
+    )
+    assert status == 400
+    assert "temperature" in json.loads(body)["detail"]

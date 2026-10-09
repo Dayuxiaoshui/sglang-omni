@@ -81,30 +81,23 @@ private:
   size_t offset_ = 0;
 };
 
-// The token of a language code or English name; English when unknown.
-std::string LanguageToken(const std::string &language) {
+// The code of a language code or English name; English when unknown.
+std::string LanguageCode(const std::string &language) {
   static const std::map<std::string, std::string> table = {
-      {"english", "<|en|>"},    {"en", "<|en|>"},
-      {"french", "<|fr|>"},     {"fr", "<|fr|>"},
-      {"german", "<|de|>"},     {"de", "<|de|>"},
-      {"spanish", "<|es|>"},    {"es", "<|es|>"},
-      {"italian", "<|it|>"},    {"it", "<|it|>"},
-      {"portuguese", "<|pt|>"}, {"pt", "<|pt|>"},
-      {"dutch", "<|nl|>"},      {"nl", "<|nl|>"},
-      {"polish", "<|pl|>"},     {"pl", "<|pl|>"},
-      {"greek", "<|el|>"},      {"el", "<|el|>"},
-      {"arabic", "<|ar|>"},     {"ar", "<|ar|>"},
-      {"japanese", "<|ja|>"},   {"ja", "<|ja|>"},
-      {"chinese", "<|zh|>"},    {"zh", "<|zh|>"},
-      {"vietnamese", "<|vi|>"}, {"vi", "<|vi|>"},
-      {"korean", "<|ko|>"},     {"ko", "<|ko|>"},
+      {"english", "en"},    {"en", "en"}, {"french", "fr"},     {"fr", "fr"},
+      {"german", "de"},     {"de", "de"}, {"spanish", "es"},    {"es", "es"},
+      {"italian", "it"},    {"it", "it"}, {"portuguese", "pt"}, {"pt", "pt"},
+      {"dutch", "nl"},      {"nl", "nl"}, {"polish", "pl"},     {"pl", "pl"},
+      {"greek", "el"},      {"el", "el"}, {"arabic", "ar"},     {"ar", "ar"},
+      {"japanese", "ja"},   {"ja", "ja"}, {"chinese", "zh"},    {"zh", "zh"},
+      {"vietnamese", "vi"}, {"vi", "vi"}, {"korean", "ko"},     {"ko", "ko"},
   };
   std::string key = language;
   std::transform(key.begin(), key.end(), key.begin(), [](unsigned char c) {
     return static_cast<char>(std::tolower(c));
   });
   const auto found = table.find(key);
-  return found == table.end() ? "<|en|>" : found->second;
+  return found == table.end() ? "en" : found->second;
 }
 
 // Strict UTF-8, as the Swift port's String(bytes:encoding:) accepts it.
@@ -371,7 +364,8 @@ CohereTranscriber::Transcribe(const std::vector<float> &samples,
                               const std::atomic<bool> &cancel) const {
   // Context, transcript start, emotion, the language twice, punctuation, no
   // inverse text normalization, no timestamps and no diarization.
-  const std::string language_token = LanguageToken(options.language);
+  const std::string language = LanguageCode(options.language);
+  const std::string language_token = "<|" + language + "|>";
   std::vector<int> prompt_ids;
   for (const std::string &token :
        {std::string("<|startofcontext|>"), std::string("<|startoftranscript|>"),
@@ -392,7 +386,8 @@ CohereTranscriber::Transcribe(const std::vector<float> &samples,
       static_cast<size_t>(options.min_chunk_duration_seconds *
                           static_cast<float>(qwen3_asr::kSampleRate));
   qwen3_asr::TranscriptionResult result;
-  result.language = options.language;
+  // The language actually decoded: an unknown one decodes as English.
+  result.language = language;
   result.finish_reason = qwen3_asr::FinishReason::kStop;
   const bool cuts_at_speech = options.voice_activity_detector != nullptr;
   const std::vector<std::pair<size_t, size_t>> chunks =

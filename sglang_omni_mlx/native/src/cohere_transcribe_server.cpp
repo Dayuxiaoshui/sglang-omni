@@ -15,7 +15,7 @@
 // by vad_threshold, vad_min_speech_ms, vad_min_silence_ms, vad_speech_pad_ms,
 // vad_merge_gap_seconds and vad_max_chunk_seconds, all required then.
 #include <cmath>
-#include <map>
+#include <memory>
 #include <stdexcept>
 
 #include "asr_service.h"
@@ -54,6 +54,12 @@ public:
                                  .value_or(options.max_new_tokens);
     options.temperature = asr_service::NumberField(form, "temperature")
                               .value_or(options.temperature);
+    if (options.max_new_tokens < 0) {
+      throw std::invalid_argument("max_new_tokens must be nonnegative");
+    } else if (options.temperature < 0) {
+      throw std::invalid_argument("temperature must be nonnegative");
+    } else {
+    }
     options.chunk_duration_seconds =
         asr_service::NumberField(form, "chunk_duration")
             .value_or(options.chunk_duration_seconds);
@@ -100,13 +106,15 @@ public:
     return [this, samples = std::move(samples), options,
             vad_directory](const std::atomic<bool> &cancel) mutable {
       if (vad_directory.has_value()) {
-        std::unique_ptr<silero_vad::SileroVAD> &detector =
-            detectors_[*vad_directory];
-        if (detector == nullptr) {
-          detector = std::make_unique<silero_vad::SileroVAD>(*vad_directory);
+        if (detector_ == nullptr || detector_directory_ != *vad_directory) {
+          // The old model goes before the new one loads, so two never
+          // sit in memory together.
+          detector_.reset();
+          detector_ = std::make_unique<silero_vad::SileroVAD>(*vad_directory);
+          detector_directory_ = *vad_directory;
         } else {
         }
-        options.voice_activity_detector = detector.get();
+        options.voice_activity_detector = detector_.get();
       } else {
       }
       return transcriber_.Transcribe(samples, options, cancel);
@@ -115,9 +123,11 @@ public:
 
 private:
   cohere_transcribe::CohereTranscriber transcriber_;
-  // Each Silero VAD loaded on first use and kept, on the worker thread only.
-  mutable std::map<std::string, std::unique_ptr<silero_vad::SileroVAD>>
-      detectors_;
+  // The Silero VAD of the last directory a request named, loaded on first
+  // use and touched on the worker thread only: one model at most, since
+  // Voxt sends the same directory every time.
+  mutable std::unique_ptr<silero_vad::SileroVAD> detector_;
+  mutable std::string detector_directory_;
 };
 
 } // namespace
