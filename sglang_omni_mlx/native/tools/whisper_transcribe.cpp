@@ -6,6 +6,7 @@
 //     [--temperature T] a.wav...
 #include <atomic>
 #include <chrono>
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <sstream>
@@ -22,7 +23,14 @@ int main(int argc, char **argv) {
   std::vector<std::string> files;
   for (int i = 1; i < argc; ++i) {
     const std::string argument = argv[i];
-    const auto value = [&]() { return std::string(argv[++i]); };
+    const auto value = [&]() {
+      if (i + 1 >= argc) {
+        std::cerr << argv[0] << ": " << argument << " needs a value\n";
+        std::exit(2);
+      } else {
+      }
+      return std::string(argv[++i]);
+    };
     if (argument == "--model-path") {
       model_path = value();
     } else if (argument == "--language") {

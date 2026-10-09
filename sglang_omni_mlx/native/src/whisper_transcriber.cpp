@@ -341,6 +341,11 @@ WhisperTranscriber::Transcribe(const std::vector<float> &samples,
   const size_t window_count = std::max<size_t>(
       1, (samples.size() + kWindowSampleCount - 1) / kWindowSampleCount);
   for (size_t window_index = 0; window_index < window_count; ++window_index) {
+    // A request cancelled between windows skips the next encoder pass.
+    if (cancel.load()) {
+      throw qwen3_asr::TranscriptionCancelled();
+    } else {
+    }
     const size_t start = window_index * kWindowSampleCount;
     const size_t end = std::min(start + kWindowSampleCount, samples.size());
     std::vector<float> window_samples(kWindowSampleCount, 0.0f);
