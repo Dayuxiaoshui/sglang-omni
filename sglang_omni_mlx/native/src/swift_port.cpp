@@ -39,25 +39,43 @@ bool IsWhitespace(uint32_t code_point, bool newlines) {
          (newlines && is_newline);
 }
 
-// The code point of valid UTF-8 at offset and its length in bytes.
+// The code point at offset and its length in bytes. A byte that does not
+// start a complete UTF-8 sequence reads as one U+FFFD, so callers never
+// step past the end of the text.
 uint32_t CodePointAt(const std::string &text, size_t offset, size_t &length) {
   const auto byte = [&](size_t k) { return static_cast<uint8_t>(text[k]); };
   const uint8_t lead = byte(offset);
+  uint32_t code_point = 0;
   if (lead < 0x80) {
     length = 1;
     return lead;
   } else if ((lead >> 5) == 0x6) {
     length = 2;
-    return ((lead & 0x1F) << 6) | (byte(offset + 1) & 0x3F);
+    code_point = lead & 0x1F;
   } else if ((lead >> 4) == 0xE) {
     length = 3;
-    return ((lead & 0x0F) << 12) | ((byte(offset + 1) & 0x3F) << 6) |
-           (byte(offset + 2) & 0x3F);
-  } else {
+    code_point = lead & 0x0F;
+  } else if ((lead >> 3) == 0x1E) {
     length = 4;
-    return ((lead & 0x07) << 18) | ((byte(offset + 1) & 0x3F) << 12) |
-           ((byte(offset + 2) & 0x3F) << 6) | (byte(offset + 3) & 0x3F);
+    code_point = lead & 0x07;
+  } else {
+    length = 1;
+    return 0xFFFD;
   }
+  if (offset + length > text.size()) {
+    length = 1;
+    return 0xFFFD;
+  } else {
+  }
+  for (size_t k = 1; k < length; ++k) {
+    if ((byte(offset + k) >> 6) != 0x2) {
+      length = 1;
+      return 0xFFFD;
+    } else {
+    }
+    code_point = (code_point << 6) | (byte(offset + k) & 0x3F);
+  }
+  return code_point;
 }
 
 } // namespace
