@@ -1,14 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-// Runs Sortformer over WAV files with Voxt's meeting feed policy and writes
-// the results, for parity checks against Voxt's Swift MLXAudioVAD.
-//
-//   sortformer_probe --model-path DIR --out DIR a.wav...
-// For each a.wav (16 kHz mono): <out>/a.probs.f32 (frames x speakers float32,
-// every feed's frames in order), <out>/a.segments.json ([{start,end,speaker}]
-// in feed seconds, as Swift feed returns them) and <out>/a.state.json (final
-// state lengths and per-feed milliseconds). Also <out>/mel_filters.f32 and
-// <out>/window.f32, and with --dump-features <out>/a.features0.f32 (the first
-// feed's log-mel, mels x frames).
+// Runs Sortformer over 16 kHz WAV files with Voxt's meeting feed policy and
+// writes each file's probabilities, segments and state, for parity checks
+// against Voxt's Swift MLXAudioVAD.
 #include <algorithm>
 #include <chrono>
 #include <filesystem>
@@ -31,8 +24,8 @@ void Write(const std::vector<float> &values,
             static_cast<std::streamsize>(values.size() * sizeof(float)));
 }
 
-// Voxt MeetingSpeakerFeedPolicy: at most five seconds, one chunk, and two
-// frames fewer than the AOSC update period, in whole diarization frames.
+// Note (Jiaxin Deng): mirrors Voxt MeetingSpeakerFeedPolicy so the probe feeds
+// what the app feeds.
 int SamplesPerFeed(const sortformer::Config &config) {
   const int frame_samples =
       config.processor.hop_length * config.fc_encoder.subsampling_factor;
@@ -72,8 +65,7 @@ int main(int argc, char **argv) {
   const int samples_per_feed = SamplesPerFeed(config);
   const size_t frame_samples = static_cast<size_t>(
       config.processor.hop_length * config.fc_encoder.subsampling_factor);
-  const sortformer::FeedOptions
-      options; // Voxt's threshold, merge gap and limits.
+  const sortformer::FeedOptions options;
   for (const auto &file : files) {
     std::ifstream stream(file, std::ios::binary);
     std::ostringstream bytes;
@@ -93,7 +85,8 @@ int main(int argc, char **argv) {
       } else {
       }
       if (dump_features && offset == 0) {
-        // Row-major copy: the extractor returns a transposed view.
+        // Note (Jiaxin Deng): the extractor returns a transposed view; copy it
+        // row-major.
         const mlx::core::array features =
             mlx::core::contiguous(model.features()(chunk));
         mlx::core::eval(features);

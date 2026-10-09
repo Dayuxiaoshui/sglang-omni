@@ -42,13 +42,9 @@ final class OmniSpeakerDiarizationTests: XCTestCase {
         }
         let state = #""state":{"fifo_length":1,"spkcache_length":0,"frames_processed":1}"#
         for reply in [
-            // Fewer probability rows than frames.
             #"{"frames":2,"speakers":1,"probabilities":[[0.5]],"segments":[],\#(state)}"#,
-            // A segment ending before it starts.
             #"{"frames":1,"speakers":1,"probabilities":[[0.5]],"segments":[{"start":1,"end":0,"speaker":0}],\#(state)}"#,
-            // A speaker the model does not have.
             #"{"frames":1,"speakers":1,"probabilities":[[0.5]],"segments":[{"start":0,"end":1,"speaker":3}],\#(state)}"#,
-            // No state.
             #"{"frames":1,"speakers":1,"probabilities":[[0.5]],"segments":[]}"#,
         ] {
             XCTAssertThrowsError(try OmniDiarizationStream.feed(fromReply: reply)) {

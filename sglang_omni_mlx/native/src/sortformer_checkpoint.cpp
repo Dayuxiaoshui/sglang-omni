@@ -15,7 +15,7 @@ namespace mx = mlx::core;
 namespace {
 
 nlohmann::json Section(const nlohmann::json &config, const char *key) {
-  // Swift decodes a missing section from the top-level object.
+  // Note (Jiaxin Deng): Swift decodes a missing section from the top level.
   return config.contains(key) ? config.at(key) : config;
 }
 
@@ -88,8 +88,8 @@ Config LoadConfig(const std::filesystem::path &model_directory) {
   } else {
   }
   const Config config = ParseConfig(nlohmann::json::parse(config_stream));
-  // Only the v2.1 (AOSC) path is ported: raw log-mel features, left context
-  // and AOSC compression. Older checkpoints peak-normalize and standardize.
+  // Note (Jiaxin Deng): only the v2.1 (AOSC) path is ported; older checkpoints
+  // peak-normalize and standardize their features.
   if (!config.modules.use_aosc) {
     throw std::runtime_error(
         "only Sortformer checkpoints with use_aosc are supported");
@@ -156,8 +156,8 @@ std::set<std::string> ExpectedKeys(const Config &config) {
   return keys;
 }
 
-// Swift SortformerModel.sanitize: PyTorch-layout checkpoints are renamed and
-// their convolution weights moved to channels-last; MLX ones pass through.
+// Note (Jiaxin Deng): mirrors Swift SortformerModel.sanitize; checkpoints
+// already in MLX layout pass through unchanged.
 std::unordered_map<std::string, mx::array>
 Sanitize(std::unordered_map<std::string, mx::array> weights) {
   bool already_converted = false;

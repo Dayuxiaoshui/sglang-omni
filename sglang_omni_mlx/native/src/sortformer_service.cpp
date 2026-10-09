@@ -17,11 +17,9 @@ namespace {
 
 using omni_server::Json;
 
-// Largest cache and FIFO a client may ask for, as Voxt's own limit.
+// Note (Jiaxin Deng): Voxt's own limit on the cache and FIFO a client asks for.
 constexpr int kMaxStateFrames = 4096;
 
-// One socket's stream: its options, model state and a partial (fragmented)
-// message.
 struct SocketState {
   FeedOptions options;
   StreamingState stream;
@@ -91,7 +89,7 @@ Json ResultJson(const FeedResult &result, const StreamingState &state) {
 }
 
 int SocketConnect(const mg_connection *connection, void *data) {
-  // Invalid options refuse the handshake.
+  // Note (Jiaxin Deng): returning 1 refuses the handshake on invalid options.
   return OptionsOf(connection, *static_cast<SortformerService *>(data))
                  .has_value()
              ? 0
@@ -133,7 +131,7 @@ int SocketData(mg_connection *connection, int bits, char *data, size_t length,
     return 1;
   } else {
   }
-  // Audio comes in binary messages only, checked before it is buffered.
+  // Note (Jiaxin Deng): checked before buffering so a client cannot grow it.
   if (opcode == MG_WEBSOCKET_OPCODE_TEXT ||
       socket->fragments.size() + length >
           service->MaxFeedSamples() * sizeof(float)) {
@@ -178,7 +176,8 @@ int SocketData(mg_connection *connection, int bits, char *data, size_t length,
     return SendText(connection, ResultJson(result, socket->stream).dump()) ? 1
                                                                            : 0;
   } catch (const std::exception &error) {
-    // The socket closes; the type alone is logged, never audio.
+    // Note (Jiaxin Deng): returning 0 closes the socket; log the type only,
+    // never audio.
     std::cerr << "diarization stream failed: " << typeid(error).name() << "\n";
     return 0;
   }
@@ -238,8 +237,8 @@ SortformerService::SortformerService(
   const auto samples_per_frame = static_cast<size_t>(
       std::lround(model_.frame_duration() *
                   static_cast<float>(model_.config().processor.sampling_rate)));
-  // N samples give 1 + N / hop mel frames and ceil(mel / 8) frames after
-  // subsampling, so one sample less than update_period frames' worth is exact.
+  // Note (Jiaxin Deng): N samples give 1 + N / hop mel frames and ceil(mel / 8)
+  // after subsampling, so one sample less than update_period frames is exact.
   max_feed_samples_ = std::min(
       kMaxFeedSamples,
       static_cast<size_t>(modules.spkcache_update_period) * samples_per_frame -
@@ -248,7 +247,8 @@ SortformerService::SortformerService(
 
 void SortformerService::CheckStateLimits(const FeedOptions &options) const {
   const Config &config = model_.config();
-  // Compression leaves spkcache_len frames whatever spkcache_max is.
+  // Note (Jiaxin Deng): compression leaves spkcache_len frames whatever
+  // spkcache_max is.
   const int cache_frames =
       std::max(options.spkcache_max, config.modules.spkcache_len);
   const int frames = cache_frames + options.fifo_max +

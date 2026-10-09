@@ -1,10 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
-"""API tests for the native server's Sortformer diarization (--model-kind
-sortformer), run against the real model and the original Voxt's outputs in the
-golden file.
+"""API tests for the native Sortformer server against the original Voxt's outputs.
 
-    NATIVE_RUNTIME_BIN=<dir with qwen3_asr_server> CI_DATA_ROOT=<provisioned root> \
-        python -m pytest sglang_omni_mlx/native/ci/test_sortformer_api.py
+Needs NATIVE_RUNTIME_BIN (the server binary directory) and CI_DATA_ROOT.
 """
 
 from __future__ import annotations
@@ -38,10 +35,9 @@ GOLDEN = json.loads(
 FEED = GOLDEN["feed"]
 TOLERANCE = GOLDEN["tolerance"]
 SPEAKERS = 4
-# Clips of the golden file, so the original's outputs are known.
 CLIP = "0064_en_mid"
-# The longest feed a stream takes: it yields the checkpoint's 188 frame speaker
-# cache update period, and one sample more would yield 189.
+# Note (Jiaxin Deng): yields the checkpoint's 188 frame update period; one sample
+# more would yield 189.
 MAX_FEED_SAMPLES = 188 * 1280 - 1
 OTHER_CLIP = "0076_en_mid"
 
@@ -218,7 +214,6 @@ def test_ready_event_and_routes(server: Server) -> None:
         "running": True,
         "request_states": {"running": 0, "streams": 0},
     }
-    # A diarization server serves no transcription or VAD routes.
     assert server.request("POST", "/v1/audio/transcriptions")[0] == 404
     assert server.request("POST", "/v1/vad/speech_timestamps")[0] == 404
 
@@ -231,12 +226,10 @@ def test_stream_matches_the_original(server: Server) -> None:
     assert_matches_original(CLIP, replies)
     processed = 0
     for chunk, reply in zip(chunks, replies):
-        # 1280 samples per frame, one more for the centred STFT's last frame.
+        # Note (Jiaxin Deng): one frame more for the centred STFT's last frame.
         assert reply["frames"] == chunk.size // 1280 + 1
         assert reply["speakers"] == SPEAKERS
         assert len(reply["probabilities"]) == reply["frames"]
-        # Each feed's segments follow from its probabilities (Swift
-        # predsToSegments with Voxt's options), in seconds from the start.
         expected = segments_of(
             np.array(reply["probabilities"], dtype=np.float32),
             processed,
@@ -311,7 +304,6 @@ def test_options_shape_the_segments(server: Server, query: str, options) -> None
             FEED["merge_gap"],
         )
         processed += reply["frames"]
-    # The options matter on this clip, and leave the probabilities alone.
     assert changed
     assert_matches_original(CLIP, replies, segments_too=False)
 
@@ -322,8 +314,8 @@ def test_small_state_limits_compress_the_cache(server: Server) -> None:
         replies = feed_all(socket, chunks)
     for reply in replies:
         assert reply["state"]["fifo_length"] <= 63
-    # The cache is compressed back to the checkpoint's 188 frames, or kept
-    # while it is under spkcache_max.
+    # Note (Jiaxin Deng): compression shrinks the cache to the checkpoint's 188
+    # frames, or leaves it while it is under spkcache_max.
     assert replies[-1]["state"]["spkcache_length"] in range(1, 189)
 
 
@@ -354,8 +346,6 @@ def test_invalid_options_are_refused(server: Server, query: str) -> None:
         "text audio",
         np.array([0.0, np.nan], dtype="<f4").tobytes(),
         np.zeros(480_001, dtype="<f4").tobytes(),
-        # Over the sample limit: it would yield 189 frames, one more than an update
-        # retires from the FIFO.
         np.zeros(MAX_FEED_SAMPLES + 1, dtype="<f4").tobytes(),
     ],
     ids=[
@@ -391,7 +381,7 @@ def test_the_longest_feeds_keep_the_fifo_bounded(server: Server) -> None:
     "query",
     [
         "spkcache_max=700&fifo_max=700",
-        # A compressed cache holds the checkpoint's 188 frames, not spkcache_max.
+        # Note (Jiaxin Deng): a compressed cache holds 188 frames, not spkcache_max.
         "spkcache_max=1&fifo_max=1310",
         "spkcache_max=100&fifo_max=1200",
     ],

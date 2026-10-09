@@ -1,20 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
-// Sortformer speaker diarization over the native server, for Voxt's meeting
-// speaker analysis:
-//
-//   WS /v1/diarization/stream[?threshold=&min_duration=&merge_gap=
-//                              &spkcache_max=&fifo_max=]
-//       One socket per audio stream; the server keeps its StreamingState.
-//       Every binary message is one feed (16 kHz float32 little-endian
-//       samples, as Swift SortformerModel.feed takes a chunk) and is answered
-//       with that feed's results:
-//         {"frames": n, "speakers": k,
-//          "probabilities": [[p_0 .. p_k-1] x n],
-//          "segments": [{"start", "end", "speaker"}],   seconds from the
-//                                                         stream's start
-//          "state": {"fifo_length", "spkcache_length", "frames_processed"}}
-//       The options default to the values Voxt passes (threshold 0.5,
-//       min_duration 0, merge_gap 0.18, spkcache_max 188, fifo_max 188).
+// Sortformer diarization for Voxt's meeting speaker analysis over WS
+// /v1/diarization/stream: each socket keeps one StreamingState, and each binary
+// message (16 kHz float32 LE samples) is one feed answered with its results.
 #pragma once
 
 #include <filesystem>

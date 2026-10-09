@@ -13,8 +13,8 @@ namespace mx = mlx::core;
 
 namespace {
 
-// A Swift scalar operand: mlx-swift converts it to the array's dtype (so a
-// Float times a float16 array stays float16), unlike a C++ float32 scalar.
+// Note (Jiaxin Deng): mlx-swift casts a scalar operand to the array's dtype
+// (float16 stays float16); a C++ float32 scalar would promote it.
 mx::array Scalar(float value, const mx::array &like) {
   return mx::array(value, like.dtype());
 }
@@ -27,7 +27,7 @@ std::vector<mx::array> SiluGraph(const std::vector<mx::array> &inputs) {
   return {mx::multiply(inputs[0], mx::sigmoid(inputs[0]))};
 }
 
-// Compiled shapeless, as MLXNN compiles relu and silu.
+// Note (Jiaxin Deng): compiled shapeless to match MLXNN relu and silu.
 mx::array Relu(const mx::array &x) {
   static const auto compiled = mx::compile(ReluGraph, true);
   return compiled({x})[0];
@@ -38,7 +38,6 @@ mx::array Silu(const mx::array &x) {
   return compiled({x})[0];
 }
 
-// Subsampled length after the three stride-2 convolutions: floor((L-1)/2)+1.
 int SubsampledLength(int frame_count, int stage_count) {
   int length = frame_count;
   for (int stage = 0; stage < stage_count; ++stage) {
@@ -49,8 +48,8 @@ int SubsampledLength(int frame_count, int stage_count) {
   return length;
 }
 
-// Transformer-XL relative positions T-1 ... -(T-1), interleaved sin/cos,
-// computed in float32 and cast to the activations' dtype.
+// Note (Jiaxin Deng): computed in float32 and cast to the activations' dtype,
+// as Swift does.
 mx::array RelativePositionalEncoding(int length, int width, mx::Dtype dtype) {
   std::vector<float> positions;
   for (int position = length - 1; position >= -(length - 1); --position) {
@@ -112,7 +111,7 @@ float SortformerModel::frame_duration() const {
 
 mx::array SortformerModel::Linear(const mx::array &x,
                                   const std::string &prefix) const {
-  // MLXNN Linear: addmm(bias, x, W^T), or a plain matmul without bias.
+  // Note (Jiaxin Deng): addmm with bias, matmul without, as MLXNN Linear.
   const auto bias = weights_.find(prefix + ".bias");
   if (bias != weights_.end()) {
     return mx::addmm(bias->second, x,
@@ -142,7 +141,6 @@ mx::array SortformerModel::PreEncode(const mx::array &features) const {
                    Weight(prefix + ".bias"));
   };
   const int channels = fc.subsampling_conv_channels;
-  // (batch, mels, time) to NHWC (batch, time, mels, 1).
   mx::array h = mx::expand_dims(mx::transpose(features, {0, 2, 1}), -1);
   h = Relu(conv(h, "layers_0", stride, padding, 1));
   h = Relu(conv(conv(h, "layers_2", stride, padding, channels), "layers_3", 1,
@@ -212,7 +210,6 @@ SortformerModel::ConformerConvolution(const mx::array &x,
   h = mx::multiply(halves[0], mx::sigmoid(halves[1]));
   h = conv(h, "depthwise_conv", (config_.fc_encoder.conv_kernel_size - 1) / 2,
            config_.fc_encoder.hidden_size);
-  // BatchNorm1d from running statistics: (x - mean) / sqrt(var + eps) * w + b.
   const mx::array &running_var = Weight(prefix + ".norm.running_var");
   h = mx::add(
       mx::multiply(
@@ -294,7 +291,6 @@ mx::array SortformerModel::TransformerLayer(const mx::array &x,
   const mx::array attended =
       mx::reshape(mx::transpose(mx::matmul(attention, v), {0, 2, 1, 3}),
                   {batch, length, tf.d_model});
-  // Post-LN: attention, add, norm, ReLU feed-forward, add, norm.
   mx::array h = mx::add(x, Linear(attended, prefix + ".self_attn.out_proj"));
   h = LayerNorm(h, prefix + ".self_attn_layer_norm", tf.layer_norm_eps);
   const mx::array residual = h;
@@ -306,9 +302,8 @@ mx::array SortformerModel::TransformerLayer(const mx::array &x,
 mx::array
 SortformerModel::SpeakerProbabilities(const mx::array &embeddings) const {
   const int length = embeddings.shape(1);
-  // All frames are valid (lengthToMask of the full length), but Swift still
-  // builds the float32 additive mask, which promotes float16 attention scores
-  // to float32 from the first transformer layer on.
+  // Note (Jiaxin Deng): Swift still adds a float32 mask, promoting float16
+  // attention scores to float32 from the first layer on.
   const mx::array valid =
       mx::less(mx::expand_dims(mx::arange(length, mx::int32), 0),
                mx::reshape(mx::array(length, mx::int32), {1, 1}));
@@ -351,7 +346,7 @@ FeedResult SortformerModel::Feed(const std::vector<float> &samples,
       static_cast<float>(state.frames_processed) * frame_duration_seconds;
   const mx::array features = features_(samples);
 
-  // Swift streamingStep: pre-encode the chunk in the checkpoint dtype.
+  // Note (Jiaxin Deng): pre-encoded in the checkpoint dtype, as in Swift.
   const mx::Dtype model_dtype =
       Weight("sortformer_modules.encoder_proj.weight").dtype();
   mx::array chunk_embeddings = PreEncode(mx::astype(features, model_dtype));
@@ -380,7 +375,7 @@ FeedResult SortformerModel::Feed(const std::vector<float> &samples,
   } else {
   }
   parts.push_back(chunk_embeddings);
-  // [spkcache, fifo, fifo[-1:], chunk]: float32 once the state holds frames.
+  // Note (Jiaxin Deng): float32 once the state holds frames, as in Swift.
   const mx::array all_embeddings = mx::concatenate(parts, 1);
 
   const mx::array encoded =
@@ -399,8 +394,6 @@ FeedResult SortformerModel::Feed(const std::vector<float> &samples,
   mx::eval({chunk_predictions, chunk_embeddings, cache_predictions,
             fifo_predictions});
 
-  // Swift updateStreamingState: refreshed cache/FIFO predictions, chunk
-  // appended to the FIFO.
   if (cache_length > 0) {
     state.spkcache_preds = cache_predictions;
   } else {
