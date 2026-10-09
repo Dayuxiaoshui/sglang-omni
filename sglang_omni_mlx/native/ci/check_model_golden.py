@@ -10,7 +10,8 @@ model served by its own binary. The golden file also names the parity tool
 (whisper_transcribe, ...), its request flags, the language each clip language
 is sent with (a user with that main language), and optionally the flags Voxt
 adds for clips past some duration. A flag given as {"model": repo} is that
-provisioned model's directory. Every corpus clip is transcribed, one tool run
+provisioned model's directory. Every corpus clip (or, with
+clips_over_seconds, every clip longer than that) is transcribed, one tool run
 per language sent and length.
 """
 
