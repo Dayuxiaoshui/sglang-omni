@@ -135,7 +135,8 @@ WhisperModel::WhisperModel(const std::filesystem::path &model_directory)
     }
   }
   std::sort(weight_files.begin(), weight_files.end());
-  // mlx-community converted the older checkpoints to weights.npz only.
+  // Note (khazic): mlx-community converted the older checkpoints to weights.npz
+  // only.
   if (!weight_files.empty()) {
     for (const auto &path : weight_files) {
       auto [loaded, metadata] = mx::load_safetensors(path.string());

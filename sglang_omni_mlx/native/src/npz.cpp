@@ -120,7 +120,8 @@ Load(const std::filesystem::path &path) {
     throw std::runtime_error(path.string() + " is not an .npz archive");
   } else {
   }
-  // The end record is the archive's last 22 bytes: numpy writes no comment.
+  // Note (khazic): the end record is the archive's last 22 bytes: numpy writes
+  // no comment.
   const std::vector<char> end_record = archive->ReadRange(
       file_size - kEndOfCentralDirectorySize, kEndOfCentralDirectorySize);
   const size_t directory_offset = ReadLittleEndian<uint32_t>(end_record, 16);
@@ -140,7 +141,7 @@ Load(const std::filesystem::path &path) {
   std::unordered_map<std::string, mx::array> arrays;
   size_t entry_offset = 0;
   for (uint16_t entry = 0; entry < entry_count; ++entry) {
-    // Also keeps the name check below from underflowing.
+    // Note (khazic): also keeps the name check below from underflowing.
     if (entry_offset + kCentralDirectoryEntrySize > directory.size() ||
         ReadLittleEndian<uint32_t>(directory, entry_offset) !=
             kCentralDirectoryEntrySignature) {
@@ -162,8 +163,9 @@ Load(const std::filesystem::path &path) {
     const std::string name(directory.data() + entry_offset +
                                kCentralDirectoryEntrySize,
                            name_length);
-    // A ZIP64 extra field holds, in order, only the values deferred to it:
-    // the uncompressed size, the compressed size, then the offset.
+    // Note (khazic): a ZIP64 extra field holds, in order, only the values
+    // deferred to it: the uncompressed size, the compressed size, then the
+    // offset.
     size_t extra_field_offset =
         entry_offset + kCentralDirectoryEntrySize + name_length;
     const size_t extra_fields_end =
