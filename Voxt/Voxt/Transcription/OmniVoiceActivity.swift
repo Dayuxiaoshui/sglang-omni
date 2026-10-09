@@ -47,7 +47,7 @@ actor OmniVoiceActivityStream {
     func probability(samples16k: [Float]) async throws -> Float? {
         let previous = tail
         let socket = socket
-        // Replies arrive in order: one exchange at a time per stream.
+        // Note (Jiaxin Deng): replies arrive in order, so one exchange at a time per stream.
         let exchange = Task { () throws -> Float? in
             await previous?.value
             try await socket.send(.data(Self.float32LittleEndian(samples16k)))

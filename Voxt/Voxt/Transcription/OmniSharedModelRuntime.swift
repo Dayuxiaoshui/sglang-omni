@@ -26,11 +26,8 @@ actor OmniSharedModelRuntime {
             throw OmniASRRuntimeError.launchFailed("The native runtime is not configured.")
         }
         leases += 1
-        // Drop a runtime whose model moved (storage root changed) or whose
-        // server failed or exited; holders of the old endpoint come back here
-        // after their next failed request. Checking suspends, and another
-        // acquire may replace the runtime meanwhile: re-read it after every
-        // suspension and drop only the runtime that was checked.
+        // Note (Jiaxin Deng): checking a runtime suspends and another acquire may replace it meanwhile,
+        // so re-read it after every suspension and drop only the runtime that was checked.
         while let current = self.runtime {
             let usable = modelDirectory == directory
             if usable, await current.canServe {
