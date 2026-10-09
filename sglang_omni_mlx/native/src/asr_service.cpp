@@ -8,7 +8,6 @@
 #include <cmath>
 #include <condition_variable>
 #include <cstring>
-#include <deque>
 #include <future>
 #include <iostream>
 #include <mutex>
@@ -30,167 +29,13 @@ namespace mx = mlx::core;
 using Json = nlohmann::ordered_json;
 using qwen3_asr::CancelFlag;
 using qwen3_asr::TranscriptionResult;
+using qwen3_asr::TranscriptionWorker;
 
 constexpr auto kHeartbeatInterval = std::chrono::milliseconds(250);
 
-// Runs every transcription on one thread, the thread that loaded the model:
-// one model, one MLX stream, one request at a time.
-class ModelWorker {
-public:
-  // Called on the worker thread with the result, or with the exception the
-  // transcription raised (TranscriptionCancelled included).
-  using Completion = std::function<void(std::optional<TranscriptionResult>,
-                                        std::exception_ptr)>;
-
-  // Loads the model on the worker thread; throws what loading throws.
-  ModelWorker(const ModelLoader &load,
-              const std::filesystem::path &model_directory) {
-    std::promise<void> loaded;
-    std::future<void> loaded_future = loaded.get_future();
-    thread_ = std::thread(&ModelWorker::Run, this, std::move(loaded), load,
-                          model_directory);
-    try {
-      loaded_future.get();
-    } catch (...) {
-      {
-        std::lock_guard<std::mutex> lock(mutex_);
-        stopping_ = true;
-      }
-      wake_.notify_all();
-      thread_.join();
-      throw;
-    }
-  }
-
-  ~ModelWorker() {
-    CancelAll();
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      stopping_ = true;
-    }
-    wake_.notify_all();
-    if (thread_.joinable()) {
-      thread_.join();
-    } else {
-    }
-  }
-
-  ModelWorker(const ModelWorker &) = delete;
-  ModelWorker &operator=(const ModelWorker &) = delete;
-
-  const ServedModel &model() const { return *model_; }
-
-  void Submit(Transcription transcription, CancelFlag cancel,
-              Completion completion) {
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      queue_.push_back(
-          {std::move(transcription), std::move(cancel), std::move(completion)});
-    }
-    wake_.notify_one();
-  }
-
-  // Requests waiting for the worker and running on it; empty when idle.
-  std::map<std::string, int> RequestStates() const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    std::map<std::string, int> states;
-    if (running_) {
-      states["running"] = 1;
-    } else {
-    }
-    if (!queue_.empty()) {
-      states["queued"] = static_cast<int>(queue_.size());
-    } else {
-    }
-    return states;
-  }
-
-  // Cancels everything queued or running, as on shutdown.
-  void CancelAll() {
-    std::lock_guard<std::mutex> lock(mutex_);
-    for (const Job &job : queue_) {
-      job.cancel->store(true);
-    }
-    if (running_cancel_) {
-      running_cancel_->store(true);
-    } else {
-    }
-  }
-
-private:
-  struct Job {
-    Transcription transcription;
-    CancelFlag cancel;
-    Completion completion;
-  };
-
-  void Run(std::promise<void> loaded, ModelLoader load,
-           std::filesystem::path model_directory) {
-    try {
-      model_ = load(model_directory);
-      loaded.set_value();
-    } catch (...) {
-      loaded.set_exception(std::current_exception());
-      return;
-    }
-    while (true) {
-      Job job;
-      {
-        std::unique_lock<std::mutex> lock(mutex_);
-        // Decodes keep MLX's buffer cache, since freeing every step's buffers
-        // slows each token. Once nothing is queued it goes back to the
-        // system, so an idle server holds only the model. The wait lets the
-        // step a decode queued ahead before it stopped return its buffers.
-        if (queue_.empty()) {
-          lock.unlock();
-          mx::synchronize();
-          mx::clear_cache();
-          lock.lock();
-        } else {
-        }
-        wake_.wait(lock, [&] { return stopping_ || !queue_.empty(); });
-        if (queue_.empty()) {
-          return;
-        } else {
-        }
-        job = std::move(queue_.front());
-        queue_.pop_front();
-        running_ = true;
-        running_cancel_ = job.cancel;
-      }
-      std::optional<TranscriptionResult> result;
-      std::exception_ptr error;
-      try {
-        // A request cancelled while it waited never starts its model work.
-        if (job.cancel->load()) {
-          throw qwen3_asr::TranscriptionCancelled();
-        } else {
-        }
-        result = job.transcription(*job.cancel);
-      } catch (...) {
-        error = std::current_exception();
-      }
-      {
-        std::lock_guard<std::mutex> lock(mutex_);
-        running_ = false;
-        running_cancel_.reset();
-      }
-      job.completion(std::move(result), error);
-    }
-  }
-
-  std::unique_ptr<ServedModel> model_;
-  mutable std::mutex mutex_;
-  std::condition_variable wake_;
-  std::deque<Job> queue_;
-  CancelFlag running_cancel_;
-  bool running_ = false;
-  bool stopping_ = false;
-  std::thread thread_;
-};
-
 struct ServerState {
-  ModelWorker *worker = nullptr;
+  TranscriptionWorker *worker = nullptr;
+  const ServedModel *model = nullptr;
   std::string model_name;
 };
 
@@ -291,7 +136,7 @@ int HandleTranscriptions(mg_connection *connection, void *data) {
   }
   Transcription transcription;
   try {
-    transcription = state->worker->model().Prepare(
+    transcription = state->model->Prepare(
         qwen3_asr::DecodeWav(form->at("file").value), *form);
   } catch (const std::invalid_argument &error) {
     return BadRequest(connection, error.what());
@@ -329,8 +174,8 @@ int HandleTranscriptions(mg_connection *connection, void *data) {
   mg_printf(connection, "HTTP/1.1 200 OK\r\nContent-Type: "
                         "text/event-stream\r\nCache-Control: no-cache\r\n"
                         "Connection: close\r\n\r\n");
-  // A client that disconnects stops the decode it was waiting for: SSE
-  // comment lines fail to write once the peer is gone.
+  // Note (Jiaxin Deng): SSE comment heartbeats fail to write once the peer is
+  // gone, which cancels the decode it was waiting for.
   while (future.wait_for(kHeartbeatInterval) != std::future_status::ready) {
     if (mg_write(connection, ":\n\n", 3) <= 0) {
       cancel->store(true);
@@ -359,7 +204,6 @@ std::string RandomHex(int length) {
   return text;
 }
 
-// Emits one supervisor event line on stdout.
 void Emit(const Json &event) {
   static std::mutex emit_mutex;
   std::lock_guard<std::mutex> lock(emit_mutex);
@@ -374,10 +218,9 @@ struct Arguments {
   bool supervised = false;
 };
 
-Arguments ParseArguments(int argc, char **argv,
-                         const std::string &served_model_kind) {
+Arguments ParseArguments(int argc, char **argv, const ServedKind &kind) {
   Arguments arguments;
-  std::string model_kind = served_model_kind;
+  std::string model_kind = kind.model_kind;
   for (int i = 1; i < argc; ++i) {
     const std::string flag = argv[i];
     const auto value = [&]() -> std::string {
@@ -399,27 +242,30 @@ Arguments ParseArguments(int argc, char **argv,
       arguments.supervised = true;
     } else if (flag == "--model-kind") {
       model_kind = value();
-    } else if (flag == "--derived-root" || flag == "--startup-timeout-s") {
-      value(); // Accepted for the supervisor's command line; not needed here.
+    } else if (flag == "--startup-timeout-s") {
+      value(); // Note (Jiaxin Deng): Voxt passes it; unused here.
+    } else if (kind.flags.count(flag) != 0) {
+      kind.flags.at(flag)(value());
     } else {
       throw std::invalid_argument("unknown argument " + flag);
     }
   }
-  if (model_kind != served_model_kind) {
-    throw std::invalid_argument("only --model-kind " + served_model_kind +
+  if (model_kind != kind.model_kind) {
+    throw std::invalid_argument("only --model-kind " + kind.model_kind +
                                 " is served");
   } else if (arguments.model_path.empty()) {
     throw std::invalid_argument("--model-path is required");
+  } else if (kind.check_flags) {
+    kind.check_flags();
   } else {
   }
   if (arguments.model_name.empty()) {
-    arguments.model_name = "voxt-" + served_model_kind + "-" + RandomHex(12);
+    arguments.model_name = "voxt-" + kind.model_kind + "-" + RandomHex(12);
   } else {
   }
   return arguments;
 }
 
-// Why the server stops: a shutdown command, end of stdin, or a signal.
 class StopSignal {
 public:
   void Set(const std::string &reason) {
@@ -470,7 +316,7 @@ std::optional<int> IntegerField(const FormFields &form,
   try {
     value = std::stoi(*text, &parsed);
   } catch (const std::logic_error &) {
-    // parsed stays 0, so the check below names the field.
+    // Note (khazic): parsed stays 0, so the check below names the field.
   }
   if (parsed != text->size()) {
     throw std::invalid_argument(name + " must be an integer");
@@ -491,7 +337,7 @@ std::optional<float> NumberField(const FormFields &form,
   try {
     value = std::stof(*text, &parsed);
   } catch (const std::logic_error &) {
-    // parsed stays 0, so the check below names the field.
+    // Note (khazic): parsed stays 0, so the check below names the field.
   }
   if (parsed != text->size() || !std::isfinite(value)) {
     throw std::invalid_argument(name + " must be a finite number");
@@ -500,10 +346,10 @@ std::optional<float> NumberField(const FormFields &form,
   return value;
 }
 
-int Serve(int argc, char **argv, const std::string &model_kind,
-          const ModelLoader &load) {
+int Serve(int argc, char **argv, const ServedKind &kind) {
   const auto started = std::chrono::steady_clock::now();
-  // Stop signals go to one waiting thread, not to whichever thread runs.
+  // Note (Jiaxin Deng): stop signals go to one waiting thread, not to
+  // whichever thread happens to run.
   sigset_t stop_signals;
   sigemptyset(&stop_signals);
   for (const int signal_number : {SIGTERM, SIGINT, SIGHUP, SIGQUIT})
@@ -513,7 +359,7 @@ int Serve(int argc, char **argv, const std::string &model_kind,
 
   Arguments arguments;
   try {
-    arguments = ParseArguments(argc, argv, model_kind);
+    arguments = ParseArguments(argc, argv, kind);
   } catch (const std::exception &error) {
     std::cerr << argv[0] << ": " << error.what() << "\n";
     return 2;
@@ -535,7 +381,7 @@ int Serve(int argc, char **argv, const std::string &model_kind,
           } else {
           }
         } catch (const nlohmann::json::exception &) {
-          // Malformed control lines are ignored.
+          // Note (Jiaxin Deng): malformed control lines are ignored.
         }
       }
       stop.Set("closed");
@@ -543,11 +389,13 @@ int Serve(int argc, char **argv, const std::string &model_kind,
   } else {
   }
 
-  std::unique_ptr<ModelWorker> worker;
+  std::unique_ptr<ServedModel> model;
+  std::unique_ptr<TranscriptionWorker> worker;
   std::atomic<bool> loaded(false);
   std::thread loader([&]() {
     try {
-      worker = std::make_unique<ModelWorker>(load, arguments.model_path);
+      worker = std::make_unique<TranscriptionWorker>(
+          [&]() { model = kind.load(arguments.model_path); });
       loaded.store(true);
     } catch (const std::exception &error) {
       if (arguments.supervised) {
@@ -559,7 +407,8 @@ int Serve(int argc, char **argv, const std::string &model_kind,
       std::_Exit(1);
     }
   });
-  // A stop before the model is ready ends the process at once.
+  // Note (Jiaxin Deng): a stop before the model is ready ends the process at
+  // once.
   while (!loaded.load()) {
     const std::string reason = stop.Reason();
     if (!reason.empty()) {
@@ -574,13 +423,19 @@ int Serve(int argc, char **argv, const std::string &model_kind,
   }
   loader.join();
 
-  ServerState state{worker.get(), arguments.model_name};
+  ServerState state{worker.get(), model.get(), arguments.model_name};
   mg_init_library(0);
   const std::string listening =
       arguments.host + ":" + std::to_string(arguments.port);
-  const char *options[] = {
-      "listening_ports",    listening.c_str(), "num_threads", "16",
-      "request_timeout_ms", "3600000",         nullptr};
+  const char *options[] = {"listening_ports",
+                           listening.c_str(),
+                           "num_threads",
+                           "16",
+                           "request_timeout_ms",
+                           "3600000",
+                           "websocket_timeout_ms",
+                           "3600000",
+                           nullptr};
   mg_callbacks callbacks{};
   mg_context *context = mg_start(&callbacks, &state, options);
   if (context == nullptr) {
@@ -592,7 +447,7 @@ int Serve(int argc, char **argv, const std::string &model_kind,
     return 1;
   } else {
   }
-  // Port 0 lets the system pick a free port when the socket binds.
+  // Note (Jiaxin Deng): port 0 lets the system pick a free port at bind time.
   mg_server_port server_port{};
   mg_get_server_ports(context, 1, &server_port);
   const std::string endpoint =
@@ -601,6 +456,7 @@ int Serve(int argc, char **argv, const std::string &model_kind,
   mg_set_request_handler(context, "/v1/models$", HandleModels, &state);
   mg_set_request_handler(context, "/v1/audio/transcriptions$",
                          HandleTranscriptions, &state);
+  model->AddHandlers(context, *worker);
   const double startup_seconds =
       std::chrono::duration<double>(std::chrono::steady_clock::now() - started)
           .count();
@@ -617,9 +473,8 @@ int Serve(int argc, char **argv, const std::string &model_kind,
   }
 
   const std::string reason = stop.Wait();
-  // Every decode in flight is cancelled and the process exits at once:
-  // civetweb's own stop waits out its 2 s poll quantum, and an owner stopping
-  // the server has no use for the open responses.
+  // Note (Jiaxin Deng): cancel and exit at once; civetweb's own stop waits out
+  // its 2 s poll quantum, and the owner has no use for the open responses.
   worker->CancelAll();
   if (reason == "shutdown") {
     Emit({{"event", "stopped"}});

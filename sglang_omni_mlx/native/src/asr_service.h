@@ -1,10 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
-// One model kind served the way qwen3_asr_server serves Qwen3-ASR: the same
-// transcription API (JSON or SSE) and Voxt's supervisor protocol, without the
-// realtime API. Each model binary supplies how it loads and reads a request.
+// The server every native model binary runs: the transcription API (JSON or
+// SSE) and Voxt's supervisor protocol. Each binary supplies how it loads and
+// reads a request, its own flags, and any handlers beyond that API.
 #pragma once
 
-#include <atomic>
 #include <filesystem>
 #include <functional>
 #include <map>
@@ -14,15 +13,14 @@
 #include <vector>
 
 #include "form.h"
-#include "transcriber.h"
+#include "worker.h"
+
+struct mg_context;
 
 namespace asr_service {
 
 using FormFields = std::map<std::string, qwen3_asr::FormField>;
-// One transcription bound to its audio and options; runs on the worker
-// thread, the thread that loaded the model.
-using Transcription =
-    std::function<qwen3_asr::TranscriptionResult(const std::atomic<bool> &)>;
+using qwen3_asr::Transcription;
 
 // A loaded checkpoint of the served kind.
 class ServedModel {
@@ -32,10 +30,22 @@ public:
   // std::invalid_argument for a field it does not accept.
   virtual Transcription Prepare(std::vector<float> samples,
                                 const FormFields &form) const = 0;
+  // Adds handlers beyond the transcription API once the server listens.
+  virtual void AddHandlers(mg_context *, qwen3_asr::TranscriptionWorker &) {}
 };
 
 using ModelLoader =
     std::function<std::unique_ptr<ServedModel>(const std::filesystem::path &)>;
+
+struct ServedKind {
+  std::string model_kind;
+  ModelLoader load;
+  // Flags beyond the common ones, each taking a value; a setter throws
+  // std::logic_error for a value it cannot use.
+  std::map<std::string, std::function<void(const std::string &)>> flags;
+  // Checks the parsed flags together; throws std::invalid_argument.
+  std::function<void()> check_flags;
+};
 
 // A form field as given, or as an integer or a finite number; the latter two
 // throw std::invalid_argument when the field is not one, and leave out empty
@@ -47,11 +57,10 @@ std::optional<int> IntegerField(const FormFields &form,
 std::optional<float> NumberField(const FormFields &form,
                                  const std::string &name);
 
-// Runs the server for model_kind until it is stopped; returns the exit code.
+// Runs the server for kind until it is stopped; returns the exit code.
 //
 //   BINARY --model-path DIR [--model-name NAME] [--host H] [--port P]
 //   BINARY --supervised --model-kind KIND --model-directory DIR
-int Serve(int argc, char **argv, const std::string &model_kind,
-          const ModelLoader &load);
+int Serve(int argc, char **argv, const ServedKind &kind);
 
 } // namespace asr_service

@@ -60,8 +60,12 @@ target_link_libraries(qwen3_asr PUBLIC mlx nlohmann_json::nlohmann_json pcre2-8-
   "-framework CoreFoundation")
 target_compile_options(qwen3_asr PUBLIC ${MLX_CXX_FLAGS} PRIVATE -Wall -Wextra)
 
+add_library(asr_service STATIC src/asr_service.cpp)
+target_link_libraries(asr_service PUBLIC qwen3_asr civetweb-c-library)
+target_compile_options(asr_service PRIVATE -Wall -Wextra)
+
 add_executable(qwen3_asr_server src/server.cpp)
-target_link_libraries(qwen3_asr_server PRIVATE qwen3_asr civetweb-c-library)
+target_link_libraries(qwen3_asr_server PRIVATE asr_service)
 
 add_executable(qwen3_asr_transcribe tools/transcribe.cpp)
 target_link_libraries(qwen3_asr_transcribe PRIVATE qwen3_asr)
@@ -80,17 +84,14 @@ foreach(runtime_file ${MLX_RUNTIME_FILES})
   install(FILES "${resolved_file}" DESTINATION bin)
 endforeach()
 
-# Whisper: whisper_server, with qwen3_asr_server's API without realtime, and
+# Note (khazic): Whisper: whisper_server, with qwen3_asr_server's API without realtime, and
 # its parity tool. Both reuse the WAV decoder, form parser and byte-level
 # tokenizer above.
-add_library(asr_service STATIC src/asr_service.cpp)
-target_link_libraries(asr_service PUBLIC qwen3_asr civetweb-c-library)
-target_compile_options(asr_service PRIVATE -Wall -Wextra)
 add_library(swift_port STATIC src/swift_port.cpp)
 target_link_libraries(swift_port PUBLIC mlx)
 add_library(whisper_asr STATIC src/whisper_model.cpp src/whisper_transcriber.cpp)
 target_link_libraries(whisper_asr PUBLIC qwen3_asr swift_port)
-# CPU float math rounds each operation, as Swift does: no fused multiply-add.
+# Note (khazic): CPU float math rounds each operation, as Swift does: no fused multiply-add.
 target_compile_options(swift_port PRIVATE -Wall -Wextra -ffp-contract=off)
 target_compile_options(whisper_asr PRIVATE -Wall -Wextra -ffp-contract=off)
 add_executable(whisper_server src/whisper_server.cpp)

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-// Native Whisper server: transcriptions over HTTP (JSON or SSE) with the API
-// of qwen3_asr_server, without its realtime API, and Voxt's supervisor
-// protocol.
+// Native Whisper server: asr_service's transcription API (JSON or SSE) and
+// supervisor protocol, without qwen3_asr_server's realtime API.
 //
 //   whisper_server --model-path DIR [--model-name NAME] [--host H] [--port P]
 //   whisper_server --supervised --model-kind whisper --model-directory DIR
@@ -51,8 +50,10 @@ private:
 } // namespace
 
 int main(int argc, char **argv) {
-  return asr_service::Serve(
-      argc, argv, "whisper", [](const std::filesystem::path &model_directory) {
-        return std::make_unique<WhisperModelService>(model_directory);
-      });
+  asr_service::ServedKind kind;
+  kind.model_kind = "whisper";
+  kind.load = [](const std::filesystem::path &model_directory) {
+    return std::make_unique<WhisperModelService>(model_directory);
+  };
+  return asr_service::Serve(argc, argv, kind);
 }
