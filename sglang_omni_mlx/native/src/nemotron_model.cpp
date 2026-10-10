@@ -56,11 +56,26 @@ NemotronModel::NemotronModel(const nlohmann::json &config,
     config_.max_symbols_per_frame = config.at("max_symbols").get<int>();
   } else {
   }
-  const bool prompts_in_range = std::all_of(
-      config_.prompt_indices.begin(), config_.prompt_indices.end(),
-      [&](const auto &entry) {
-        return entry.second >= 0 && entry.second < config_.prompt_count;
-      });
+  const bool prompts_in_range =
+      !config_.prompt_indices.empty() &&
+      std::all_of(config_.prompt_indices.begin(), config_.prompt_indices.end(),
+                  [&](const auto &entry) {
+                    return entry.second >= 0 &&
+                           entry.second < config_.prompt_count;
+                  });
+  // Note (Dayuxiaoshui): positions fill sine and cosine columns in pairs and
+  // heads split the width evenly, and the joint's last class is the blank
+  // after the vocabulary.
+  const int vocabulary_size = static_cast<int>(config_.vocabulary.size());
+  if (config_.model_width % 2 != 0 || config_.head_count < 1 ||
+      config_.model_width % config_.head_count != 0 ||
+      config.at("decoder").at("vocab_size").get<int>() != vocabulary_size ||
+      config.at("joint").at("num_classes").get<int>() != vocabulary_size) {
+    throw std::runtime_error(
+        "Nemotron config: d_model must be even and split across n_heads, and "
+        "vocab_size and num_classes must equal the vocabulary's size");
+  } else {
+  }
   // Note (Dayuxiaoshui): the graph below is the published checkpoint's: 8x
   // causal subsampling, unscaled inputs, bias-free layer-normed convolutions,
   // a ReLU joint and unnormalized features.
@@ -179,15 +194,7 @@ mx::array NemotronModel::RelativeAttention(const mx::array &queries,
             position_count);
   mx::array position_scores =
       mx::matmul(position_queries, mx::swapaxes(positions, -2, -1));
-  // Note (Dayuxiaoshui): the relative shift: a left zero column, then rows
-  // reread one step along, aligns score (i, j) with position i - j.
-  position_scores = mx::pad(position_scores, {{0, 0}, {0, 0}, {0, 0}, {1, 0}});
-  position_scores = mx::reshape(
-      position_scores, {1, head_count, position_count + 1, query_count});
-  position_scores =
-      mx::reshape(mx::slice(position_scores, {0, 0, 1, 0},
-                            {1, head_count, position_count + 1, query_count}),
-                  {1, head_count, query_count, position_count});
+  position_scores = qwen3_asr::RelativeShift(position_scores);
   position_scores =
       mx::multiply(mx::slice(position_scores, {0, 0, 0, 0},
                              {1, head_count, query_count, key_count}),
@@ -318,25 +325,15 @@ NemotronModel::Predict(std::optional<int> token,
         mx::addmm(checkpoint_.Weight(lstm_prefix + ".bias"), output,
                   mx::transpose(checkpoint_.Weight(lstm_prefix + ".Wx")));
     gates = mx::reshape(gates, {1, gates.shape(-1)});
-    if (state.has_value()) {
-      gates = mx::addmm(gates, state->hidden[layer],
-                        mx::transpose(checkpoint_.Weight(lstm_prefix + ".Wh")));
-    } else {
-    }
-    const std::vector<mx::array> pieces = mx::split(gates, 4, -1);
-    const mx::array input_gate = mx::sigmoid(pieces[0]);
-    const mx::array forget_gate = mx::sigmoid(pieces[1]);
-    const mx::array candidate = mx::tanh(pieces[2]);
-    const mx::array output_gate = mx::sigmoid(pieces[3]);
-    const mx::array cell =
-        state.has_value()
-            ? mx::add(mx::multiply(forget_gate, state->cell[layer]),
-                      mx::multiply(input_gate, candidate))
-            : mx::multiply(input_gate, candidate);
-    const mx::array hidden = mx::multiply(output_gate, mx::tanh(cell));
-    next.hidden.push_back(hidden);
-    next.cell.push_back(cell);
-    output = mx::expand_dims(hidden, 1);
+    const qwen3_asr::LstmCell step = qwen3_asr::LstmStep(
+        gates,
+        state.has_value() ? std::optional<qwen3_asr::LstmCell>(
+                                {state->hidden[layer], state->cell[layer]})
+                          : std::nullopt,
+        checkpoint_.Weight(lstm_prefix + ".Wh"));
+    next.hidden.push_back(step.hidden);
+    next.cell.push_back(step.cell);
+    output = mx::expand_dims(step.hidden, 1);
   }
   return {output, next};
 }

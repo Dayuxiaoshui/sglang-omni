@@ -59,7 +59,10 @@ private:
   std::optional<std::string> language_;
   int prompt_index_ = 0;
   int chunk_frames_ = 0;
+  // The audio from sample_offset_ on; earlier samples feed no mel frame that
+  // is still to be decoded, so they are dropped.
   std::vector<float> samples_;
+  int sample_offset_ = 0;
 
   // Encoder state between chunks.
   std::vector<LayerCache> layer_caches_;
@@ -80,6 +83,7 @@ public:
 
   // The whole recording through the streaming loop; with no chunk_frames,
   // at the native chunk size, as Voxt's Swift port decodes its Final pass.
+  // The audio goes in one chunk at a time, so memory stays flat with length.
   qwen3_asr::TranscriptionResult
   Transcribe(const std::vector<float> &samples, const NemotronOptions &options,
              const std::atomic<bool> &cancel) const;

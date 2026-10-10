@@ -3,6 +3,7 @@
 
 #include <array>
 #include <cmath>
+#include <cstdint>
 
 namespace nemotron {
 
@@ -11,6 +12,9 @@ namespace {
 // Note (Dayuxiaoshui): Voxt's live latency settings; a requested chunk length
 // snaps to the nearest, as the Swift session's custom delay preset does.
 constexpr std::array<int, 5> kChunkMilliseconds = {80, 160, 320, 560, 1120};
+// Note (Dayuxiaoshui): the stream counts samples in int, which a 16 kHz
+// session overflows after about 37 hours; one day stays well below that.
+constexpr int64_t kMaxSessionSeconds = 24 * 60 * 60;
 
 } // namespace
 
@@ -99,8 +103,15 @@ void NemotronRealtimeSession::Append(const nlohmann::json &audio) {
     return;
   } else if (failed_) {
     return;
+  } else if (received_samples_ + static_cast<int64_t>(appended->size()) >
+             kMaxSessionSeconds * transcriber_.front_end().sampling_rate) {
+    lock.unlock();
+    SendError("invalid_request_error", "session_too_long",
+              "A session takes at most 24 hours of audio.");
+    return;
   } else {
   }
+  received_samples_ += static_cast<int64_t>(appended->size());
   pending_samples_.insert(pending_samples_.end(), appended->begin(),
                           appended->end());
   if (!decoding_) {

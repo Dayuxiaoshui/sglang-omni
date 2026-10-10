@@ -666,3 +666,61 @@ def test_nemotron_realtime_rejects_a_bad_latency(
             )
         )
         assert json.loads(socket.recv())["error"]["code"] == "invalid_chunk"
+
+
+def append_event(pcm: bytes) -> str:
+    return json.dumps(
+        {"type": "input_audio_buffer.append", "audio": base64.b64encode(pcm).decode()}
+    )
+
+
+def test_nemotron_realtime_rejects_audio_after_commit(
+    nemotron_server: ModelServer,
+) -> None:
+    pcm = pcm16("0006_en_short")
+    with connect(f"ws://127.0.0.1:{nemotron_server.port}/v1/realtime") as socket:
+        socket.send(
+            json.dumps({"type": "session.update", "session": {"turn_detection": None}})
+        )
+        assert json.loads(socket.recv())["type"] == "transcription_session.updated"
+        socket.send(append_event(pcm))
+        socket.send(json.dumps({"type": "input_audio_buffer.commit"}))
+        socket.send(append_event(pcm[:3200]))
+        event = json.loads(socket.recv())
+        while event["type"] == "transcription.segment" and not event["is_final"]:
+            event = json.loads(socket.recv())
+        assert event["text"].lower().startswith("surely you are not thinking")
+        assert json.loads(socket.recv())["error"]["code"] == "session_finished"
+
+
+def test_nemotron_realtime_disconnect_stops_its_decode(
+    nemotron_server: ModelServer,
+) -> None:
+    clip_pcm = pcm16("0344_en_long")
+    pcm = (clip_pcm * (600 * 32000 // len(clip_pcm) + 1))[: 600 * 32000]
+    with connect(f"ws://127.0.0.1:{nemotron_server.port}/v1/realtime") as socket:
+        socket.send(
+            json.dumps(
+                {
+                    "type": "session.update",
+                    "session": {"turn_detection": None, "chunk_ms": 80},
+                }
+            )
+        )
+        assert json.loads(socket.recv())["type"] == "transcription_session.updated"
+        for start in range(0, len(pcm), 320000):
+            socket.send(append_event(pcm[start : start + 320000]))
+        time.sleep(2.0)
+        assert json.loads(nemotron_server.request("GET", "/health")[1])[
+            "request_states"
+        ] == {"running": 1}
+        closed_at = time.monotonic()
+    # Note (Dayuxiaoshui): the stream checks the cancel flag before each chunk,
+    # so the decode of ten minutes of audio stops within a chunk of the close.
+    while (
+        json.loads(nemotron_server.request("GET", "/health")[1])["request_states"] != {}
+    ):
+        assert (
+            time.monotonic() - closed_at < 1.5
+        ), "the decode kept running after its client left"
+        time.sleep(0.05)

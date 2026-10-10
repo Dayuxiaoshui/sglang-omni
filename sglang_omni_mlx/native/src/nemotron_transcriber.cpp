@@ -21,7 +21,7 @@ constexpr int kMelCacheFrames = 16;
 constexpr const char *kWordMarker = "\xE2\x96\x81"; // U+2581
 // Note (Dayuxiaoshui): the front end needs two samples for preemphasis; one
 // sample alone (which Swift decodes as one mel frame) gives no text here.
-constexpr size_t kMinFrontEndSamples = 2;
+constexpr int kMinFrontEndSamples = 2;
 
 bool Contains(const std::string &text, const char *needle) {
   return text.find(needle) != std::string::npos;
@@ -108,7 +108,19 @@ NemotronTranscriber::Transcribe(const std::vector<float> &samples,
                                 const NemotronOptions &options,
                                 const std::atomic<bool> &cancel) const {
   NemotronStream stream(*this, options);
-  stream.Finish(samples, cancel);
+  const size_t chunk_samples =
+      static_cast<size_t>(options.chunk_frames.value_or(
+          model_.config().right_context_frames + 1)) *
+      model_.config().subsampling_factor * front_end_.hop_length;
+  for (size_t start = 0; start < samples.size(); start += chunk_samples) {
+    const auto first = samples.begin() + static_cast<std::ptrdiff_t>(start);
+    stream.Append(
+        std::vector<float>(first,
+                           first + static_cast<std::ptrdiff_t>(std::min(
+                                       chunk_samples, samples.size() - start))),
+        cancel);
+  }
+  stream.Finish({}, cancel);
   return stream.Result();
 }
 
@@ -131,7 +143,7 @@ void NemotronStream::Append(const std::vector<float> &samples,
   samples_.insert(samples_.end(), samples.begin(), samples.end());
   const int half_window = transcriber_.front_end().fft_size / 2;
   const int hop = transcriber_.front_end().hop_length;
-  const int sample_count = static_cast<int>(samples_.size());
+  const int sample_count = sample_offset_ + static_cast<int>(samples_.size());
   // Note (Dayuxiaoshui): mel frame m reads samples up to m * hop + n_fft / 2,
   // so frames below this limit no longer change as audio arrives.
   const int frozen_frames =
@@ -153,25 +165,24 @@ void NemotronStream::Decode(int mel_frame_limit, bool flush,
   const int chunk_mel_frames = chunk_frames_ * factor;
   // Note (Dayuxiaoshui): centered framing gives 1 + samples / hop mel frames,
   // so a call that cannot fill a whole chunk returns before the mel.
-  const int mel_frame_count = 1 + static_cast<int>(samples_.size()) /
-                                      transcriber_.front_end().hop_length;
-  const int reachable = mel_frame_limit < 0
-                            ? mel_frame_count
-                            : std::min(mel_frame_count, mel_frame_limit);
-  if (samples_.size() < kMinFrontEndSamples ||
-      (!flush && reachable - consumed_mel_frames_ < chunk_mel_frames)) {
+  const int hop = transcriber_.front_end().hop_length;
+  const int sample_count = sample_offset_ + static_cast<int>(samples_.size());
+  const int mel_frames = 1 + sample_count / hop;
+  const int limit =
+      mel_frame_limit < 0 ? mel_frames : std::min(mel_frames, mel_frame_limit);
+  if (sample_count < kMinFrontEndSamples ||
+      (!flush && limit - consumed_mel_frames_ < chunk_mel_frames)) {
     return;
   } else {
   }
-  // Note (Dayuxiaoshui): the whole buffer's mel is recomputed each call, as
-  // the Swift session does, so a frame's values never depend on where the
-  // audio was split.
+  // Note (Dayuxiaoshui): only the kept audio's mel is computed. It starts a
+  // whole number of hops in, so its frame i is frame first_frame + i of the
+  // full recording; its first frames, which read the padding or a sample
+  // whose preemphasis lost its predecessor, are already decoded.
+  const int first_frame = sample_offset_ / hop;
   const mx::array mel =
       mx::astype(mx::transpose(transcriber_.features()(samples_), {0, 2, 1}),
                  mx::bfloat16);
-  const int mel_frames = mel.shape(1);
-  const int limit =
-      mel_frame_limit < 0 ? mel_frames : std::min(mel_frames, mel_frame_limit);
   while (consumed_mel_frames_ < limit) {
     if (cancel.load()) {
       throw qwen3_asr::TranscriptionCancelled();
@@ -182,8 +193,9 @@ void NemotronStream::Decode(int mel_frame_limit, bool flush,
       break;
     } else {
     }
-    const mx::array chunk = mx::slice(mel, {0, consumed_mel_frames_, 0},
-                                      {1, end, config.feature_count});
+    const mx::array chunk =
+        mx::slice(mel, {0, consumed_mel_frames_ - first_frame, 0},
+                  {1, end - first_frame, config.feature_count});
     const int cached_frames = mel_cache_.has_value() ? mel_cache_->shape(1) : 0;
     const mx::array window = mel_cache_.has_value()
                                  ? mx::concatenate({*mel_cache_, chunk}, 1)
@@ -231,6 +243,20 @@ void NemotronStream::Decode(int mel_frame_limit, bool flush,
     }
   }
   mx::eval(carried);
+  // Note (Dayuxiaoshui): mel frame m reads samples from m * hop - n_fft / 2,
+  // and preemphasis one sample before that; keep whole hops back to there.
+  const int lookback_hops =
+      (transcriber_.front_end().fft_size / 2 + 1 + hop - 1) / hop;
+  const int keep_from = std::max(0, consumed_mel_frames_ - lookback_hops) * hop;
+  if (keep_from > sample_offset_) {
+    samples_.erase(samples_.begin(),
+                   samples_.begin() + (keep_from - sample_offset_));
+    sample_offset_ = keep_from;
+  } else {
+  }
+  // Note (Dayuxiaoshui): as Swift's session does after each step, return this
+  // call's buffers.
+  mx::clear_cache();
 }
 
 void NemotronStream::DecodeChunk(const mx::array &prompted) {

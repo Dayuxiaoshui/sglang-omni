@@ -5,6 +5,7 @@
 #pragma once
 
 #include <condition_variable>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -43,6 +44,7 @@ private:
   // running when the client leaves and the session is destroyed.
   std::shared_ptr<NemotronStream> stream_;
   std::vector<float> pending_samples_;
+  int64_t received_samples_ = 0;
   bool decoding_ = false;
   bool finished_ = false;
   // A failed decode leaves the stream half advanced, so nothing decodes after.

@@ -64,7 +64,7 @@ target_compile_options(qwen3_asr PUBLIC ${MLX_CXX_FLAGS} PRIVATE -Wall -Wextra)
 
 add_library(silero_vad STATIC src/silero_vad.cpp)
 target_include_directories(silero_vad PUBLIC src)
-target_link_libraries(silero_vad PUBLIC mlx nlohmann_json::nlohmann_json)
+target_link_libraries(silero_vad PUBLIC qwen3_asr)
 target_compile_options(silero_vad PUBLIC ${MLX_CXX_FLAGS} PRIVATE -Wall -Wextra)
 
 add_library(sortformer STATIC
@@ -73,7 +73,7 @@ add_library(sortformer STATIC
   src/sortformer_features.cpp
   src/sortformer_state.cpp)
 target_include_directories(sortformer PUBLIC src)
-target_link_libraries(sortformer PUBLIC mlx nlohmann_json::nlohmann_json)
+target_link_libraries(sortformer PUBLIC qwen3_asr)
 target_compile_options(sortformer PUBLIC ${MLX_CXX_FLAGS} PRIVATE -Wall -Wextra)
 
 add_library(asr_service STATIC src/asr_service.cpp src/http.cpp)
