@@ -210,16 +210,8 @@ mx::array ParakeetModel::Attention(const mx::array &x,
       heads(checkpoint_.Linear(x, prefix + ".linear_v"), time);
   const mx::array position_keys = heads(
       checkpoint_.Linear(positions, prefix + ".linear_pos"), position_count);
-  mx::array position_scores =
-      mx::matmul(position_queries, mx::swapaxes(position_keys, -2, -1));
-  // Note (Dayuxiaoshui): the relative shift: a left zero column, then rows
-  // reread one step along, aligns score (i, j) with position i - j.
-  position_scores = mx::pad(position_scores, {{0, 0}, {0, 0}, {0, 0}, {1, 0}});
-  position_scores = mx::reshape(
-      mx::slice(mx::reshape(position_scores,
-                            {1, head_count, position_count + 1, time}),
-                {0, 0, 1, 0}, {1, head_count, position_count + 1, time}),
-      {1, head_count, time, position_count});
+  mx::array position_scores = qwen3_asr::RelativeShift(
+      mx::matmul(position_queries, mx::swapaxes(position_keys, -2, -1)));
   position_scores = mx::multiply(
       mx::slice(position_scores, {0, 0, 0, 0}, {1, head_count, time, time}),
       mx::array(scale, position_scores.dtype()));
@@ -337,22 +329,16 @@ ParakeetModel::DecodeGraph(const std::vector<mx::array> &inputs) const {
           mx::slice(state, {layer, 0, 0}, {layer + 1, 1, prediction_width_}),
           0);
     };
-    // Note (Dayuxiaoshui): MLXNN's LSTM over one step, from the given state.
-    mx::array gates =
+    const mx::array gates =
         mx::addmm(checkpoint_.Weight(lstm + ".bias"), output,
                   mx::transpose(checkpoint_.Weight(lstm + ".Wx")));
-    gates = mx::addmm(
+    const qwen3_asr::LstmCell next = qwen3_asr::LstmStep(
         mx::squeeze(mx::slice(gates, {0, 0, 0}, {1, 1, gates.shape(2)}), 1),
-        layer_state(hidden), mx::transpose(checkpoint_.Weight(lstm + ".Wh")));
-    const std::vector<mx::array> pieces = mx::split(gates, 4, -1);
-    const mx::array next_cell =
-        mx::add(mx::multiply(mx::sigmoid(pieces[1]), layer_state(cell)),
-                mx::multiply(mx::sigmoid(pieces[0]), mx::tanh(pieces[2])));
-    const mx::array next_hidden =
-        mx::multiply(mx::sigmoid(pieces[3]), mx::tanh(next_cell));
-    hidden_states.push_back(next_hidden);
-    cell_states.push_back(next_cell);
-    output = mx::expand_dims(next_hidden, 1);
+        qwen3_asr::LstmCell{layer_state(hidden), layer_state(cell)},
+        checkpoint_.Weight(lstm + ".Wh"));
+    hidden_states.push_back(next.hidden);
+    cell_states.push_back(next.cell);
+    output = mx::expand_dims(next.hidden, 1);
   }
   const mx::array combined =
       mx::add(mx::expand_dims(checkpoint_.Linear(frame, "joint.enc"), 2),
