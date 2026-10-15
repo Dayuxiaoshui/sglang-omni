@@ -42,7 +42,7 @@
   <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9" />
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
 
-    <script src="../_static/documentation_options.js?v=3476fdda"></script>
+    <script src="../_static/documentation_options.js?v=7ed07c24"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -57,11 +57,11 @@
     <link rel="index" title="Index" href="../genindex.html" />
     <link rel="search" title="Search" href="../search.html" />
     <link rel="next" title="Ming-Omni-TTS" href="ming_tts.html" />
-    <link rel="prev" title="Fish Audio S2-Pro" href="fishaudio_s2_pro.html" />
+    <link rel="prev" title="Fish Audio Drama 3" href="fishaudio_drama3.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
-  <meta name="docsearch:version" content="0.1.7" />
-    <meta name="docbuild:last-update" content="Oct 10, 2026"/>
+  <meta name="docsearch:version" content="0.1.8" />
+    <meta name="docbuild:last-update" content="Oct 15, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -215,8 +215,10 @@
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Cookbook</span></p>
 <ul class="current nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="higgs_tts.html">Higgs TTS</a></li>
+<li class="toctree-l1"><a class="reference internal" href="nemotron_diarization.html">Nemotron 3 Diarization</a></li>
 <li class="toctree-l1"><a class="reference internal" href="voxtral_tts.html">Voxtral TTS</a></li>
 <li class="toctree-l1"><a class="reference internal" href="fishaudio_s2_pro.html">Fish Audio S2-Pro</a></li>
+<li class="toctree-l1"><a class="reference internal" href="fishaudio_drama3.html">Fish Audio Drama 3</a></li>
 <li class="toctree-l1 current active"><a class="current reference internal" href="#">Qwen3 TTS</a></li>
 <li class="toctree-l1"><a class="reference internal" href="ming_tts.html">Ming-Omni-TTS</a></li>
 <li class="toctree-l1"><a class="reference internal" href="moss_tts.html">MOSS-TTS</a></li>
@@ -266,8 +268,13 @@
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/reference_encode_service.html">Reference Encode Service</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/profiler.html">Request-level profiler</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/qwen3_asr_concurrency_profile.html">Qwen3-ASR High-Concurrency Benchmark and Bottleneck Profile</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_reference/full_duplex_bench.html">Full-Duplex-Bench v1.5 runbook</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_reference/full_duplex_bench.html">Full-Duplex-Bench runbook</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_reference/full_duplex_metrics.html">Full-Duplex-Bench v1.0 unified metrics</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_reference/tts_bench.html">TTS benchmark runbook</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_reference/asr_bench.html">ASR benchmark runbook</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_reference/omni_offline_bench.html">MiniCPM-o offline benchmark runbook</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/rl_admin_control.html">RL Admin Control</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_reference/mlx.html">MLX Path</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/bump_version.html">Bumping the SGLang Pin</a></li>
 </ul>
 
@@ -678,6 +685,24 @@ must be <strong>≥ 1</strong>. Capacity is about <code class="docutils literal 
 HTTP <strong>503</strong> (<code class="docutils literal notranslate"><span class="pre">The</span> <span class="pre">request</span> <span class="pre">queue</span> <span class="pre">is</span> <span class="pre">full.</span></code>) before preprocessing, or later
 if the AR waiting queue or request-build backlog is full. Qwen3-TTS
 defaults to 4 request-build workers with pending depth 16.</p>
+<p>A finished request no longer counts toward that capacity, but its streamed
+audio waits in the API process until the client reads it.
+<code class="docutils literal notranslate"><span class="pre">--stream_delivery.max_total_backlog_bytes</span></code> caps the undelivered stream bytes
+all requests may hold together, per API process (default <code class="docutils literal notranslate"><span class="pre">1073741824</span></code>,
+1 GiB; <code class="docutils literal notranslate"><span class="pre">none</span></code> turns it off).</p>
+<p>A client that reads at least as fast as audio is generated holds almost
+nothing in the API process. A slower client holds the audio that is
+generated but not yet in its socket buffers; 24 kHz float32 audio is
+about 96 kB per second. This includes a client that reads at playback
+speed while generation runs faster than real time, once its socket
+buffers are full.</p>
+<p>Over the cap, the streams whose readers have been idle longest fail first,
+until the total fits. A failed stream’s generation is aborted if it is
+still running. SSE (<code class="docutils literal notranslate"><span class="pre">stream_format=sse</span></code>) and WebSocket clients get an error
+event with <code class="docutils literal notranslate"><span class="pre">The</span> <span class="pre">request</span> <span class="pre">queue</span> <span class="pre">is</span> <span class="pre">full.</span></code>; a raw PCM stream is closed early.
+New requests are not refused because of the cap. <code class="docutils literal notranslate"><span class="pre">/health</span></code> reports the
+backlog under <code class="docutils literal notranslate"><span class="pre">stream_delivery</span></code>, including the held bytes, open streams and
+failed streams.</p>
 </section>
 <section id="prefill-cuda-graphs">
 <h3>Prefill CUDA graphs<a class="headerlink" href="#prefill-cuda-graphs" title="Link to this heading">#</a></h3>
@@ -1385,12 +1410,12 @@ checkpoint is less prone.</p></li>
                   
 <div class="prev-next-area">
     <a class="left-prev"
-       href="fishaudio_s2_pro.html"
+       href="fishaudio_drama3.html"
        title="previous page">
       <i class="fa-solid fa-angle-left"></i>
       <div class="prev-next-info">
         <p class="prev-next-subtitle">previous</p>
-        <p class="prev-next-title">Fish Audio S2-Pro</p>
+        <p class="prev-next-title">Fish Audio Drama 3</p>
       </div>
     </a>
     <a class="right-next"
@@ -1487,7 +1512,7 @@ By SGLang-Omni Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Oct 10, 2026.
+  Last updated on Oct 15, 2026.
   <br/>
 </p>
   </div>

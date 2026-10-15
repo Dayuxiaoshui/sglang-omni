@@ -42,7 +42,7 @@
   <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9" />
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
 
-    <script src="../_static/documentation_options.js?v=3476fdda"></script>
+    <script src="../_static/documentation_options.js?v=7ed07c24"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -418,8 +418,8 @@ window.runMermaid = runMermaid;</script>
     <link rel="prev" title="MiniCPM-o" href="minicpm_o.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
-  <meta name="docsearch:version" content="0.1.7" />
-    <meta name="docbuild:last-update" content="Oct 10, 2026"/>
+  <meta name="docsearch:version" content="0.1.8" />
+    <meta name="docbuild:last-update" content="Oct 15, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -573,8 +573,10 @@ window.runMermaid = runMermaid;</script>
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Cookbook</span></p>
 <ul class="current nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="higgs_tts.html">Higgs TTS</a></li>
+<li class="toctree-l1"><a class="reference internal" href="nemotron_diarization.html">Nemotron 3 Diarization</a></li>
 <li class="toctree-l1"><a class="reference internal" href="voxtral_tts.html">Voxtral TTS</a></li>
 <li class="toctree-l1"><a class="reference internal" href="fishaudio_s2_pro.html">Fish Audio S2-Pro</a></li>
+<li class="toctree-l1"><a class="reference internal" href="fishaudio_drama3.html">Fish Audio Drama 3</a></li>
 <li class="toctree-l1"><a class="reference internal" href="qwen3_tts.html">Qwen3 TTS</a></li>
 <li class="toctree-l1"><a class="reference internal" href="ming_tts.html">Ming-Omni-TTS</a></li>
 <li class="toctree-l1"><a class="reference internal" href="moss_tts.html">MOSS-TTS</a></li>
@@ -624,8 +626,13 @@ window.runMermaid = runMermaid;</script>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/reference_encode_service.html">Reference Encode Service</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/profiler.html">Request-level profiler</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/qwen3_asr_concurrency_profile.html">Qwen3-ASR High-Concurrency Benchmark and Bottleneck Profile</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_reference/full_duplex_bench.html">Full-Duplex-Bench v1.5 runbook</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_reference/full_duplex_bench.html">Full-Duplex-Bench runbook</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_reference/full_duplex_metrics.html">Full-Duplex-Bench v1.0 unified metrics</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_reference/tts_bench.html">TTS benchmark runbook</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_reference/asr_bench.html">ASR benchmark runbook</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_reference/omni_offline_bench.html">MiniCPM-o offline benchmark runbook</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/rl_admin_control.html">RL Admin Control</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_reference/mlx.html">MLX Path</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/bump_version.html">Bumping the SGLang Pin</a></li>
 </ul>
 
@@ -909,6 +916,7 @@ window.runMermaid = runMermaid;</script>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>hf<span class="w"> </span>download<span class="w"> </span>inclusionAI/Ming-flash-omni-2.0
 </pre></div>
 </div>
+<p>For Intel GPUs, follow the <a class="reference internal" href="../get_started/installation_xpu.html#ming-omni-omni-chat-and-speech-one-or-two-xpus"><span class="std std-ref">Ming-Omni XPU recipe</span></a>.</p>
 <p>The speech path expects the checkpoint to include the <code class="docutils literal notranslate"><span class="pre">talker/</span></code> assets, including <code class="docutils literal notranslate"><span class="pre">talker/data/voice_name.json</span></code> and <code class="docutils literal notranslate"><span class="pre">talker/vae/</span></code>. The default voice in the current Ming speech pipeline is <code class="docutils literal notranslate"><span class="pre">DB30</span></code>. <code class="docutils literal notranslate"><span class="pre">campplus.onnx</span></code> and <code class="docutils literal notranslate"><span class="pre">talker_tn</span></code> are optional runtime helpers: missing <code class="docutils literal notranslate"><span class="pre">campplus.onnx</span></code> disables speaker embedding extraction, and missing <code class="docutils literal notranslate"><span class="pre">talker_tn</span></code> falls back to identity text normalization.</p>
 <p><code class="docutils literal notranslate"><span class="pre">Ming-flash-omni-2.0</span></code> on HF does not ship top-level thinker tokenizer files. <code class="docutils literal notranslate"><span class="pre">load_ming_tokenizer</span></code> falls back to <code class="docutils literal notranslate"><span class="pre">inclusionAI/Ming-flash-omni-Preview</span></code> (~12 MB) to copy <code class="docutils literal notranslate"><span class="pre">tokenizer.json</span></code>, <code class="docutils literal notranslate"><span class="pre">tokenizer_config.json</span></code>, and <code class="docutils literal notranslate"><span class="pre">special_tokens_map.json</span></code>. In offline environments, download those files too:</p>
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>hf<span class="w"> </span>download<span class="w"> </span>inclusionAI/Ming-flash-omni-Preview<span class="w"> </span>tokenizer.json<span class="w"> </span>tokenizer_config.json<span class="w"> </span>special_tokens_map.json
@@ -1344,7 +1352,7 @@ window.runMermaid = runMermaid;</script>
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">temperature</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">1.0</span></code></p></td>
-<td><p>Chat-completions default. Set 0.0 for greedy deterministic examples.</p></td>
+<td><p>Thinker sampling. Set 0.0 for greedy deterministic examples.</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">top_p</span></code></p></td>
 <td><p><code class="docutils literal notranslate"><span class="pre">1.0</span></code></p></td>
@@ -1733,7 +1741,7 @@ By SGLang-Omni Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Oct 10, 2026.
+  Last updated on Oct 15, 2026.
   <br/>
 </p>
   </div>

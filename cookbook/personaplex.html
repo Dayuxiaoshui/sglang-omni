@@ -42,7 +42,7 @@
   <link rel="preload" as="script" href="../_static/scripts/bootstrap.js?digest=90905a2f556bf617f1a9" />
 <link rel="preload" as="script" href="../_static/scripts/pydata-sphinx-theme.js?digest=90905a2f556bf617f1a9" />
 
-    <script src="../_static/documentation_options.js?v=3476fdda"></script>
+    <script src="../_static/documentation_options.js?v=7ed07c24"></script>
     <script src="../_static/doctools.js?v=fd6eb6e6"></script>
     <script src="../_static/sphinx_highlight.js?v=6ffebe34"></script>
     <script src="../_static/clipboard.min.js?v=a7894cd8"></script>
@@ -60,8 +60,8 @@
     <link rel="prev" title="NemotronLabs VoiceChat" href="nemotron_voicechat.html" />
   <meta name="viewport" content="width=device-width, initial-scale=1"/>
   <meta name="docsearch:language" content="en"/>
-  <meta name="docsearch:version" content="0.1.7" />
-    <meta name="docbuild:last-update" content="Oct 10, 2026"/>
+  <meta name="docsearch:version" content="0.1.8" />
+    <meta name="docbuild:last-update" content="Oct 15, 2026"/>
   
     
     <script src="../_static/searchtools.js"></script>
@@ -215,8 +215,10 @@
 <p aria-level="2" class="caption" role="heading"><span class="caption-text">Cookbook</span></p>
 <ul class="current nav bd-sidenav">
 <li class="toctree-l1"><a class="reference internal" href="higgs_tts.html">Higgs TTS</a></li>
+<li class="toctree-l1"><a class="reference internal" href="nemotron_diarization.html">Nemotron 3 Diarization</a></li>
 <li class="toctree-l1"><a class="reference internal" href="voxtral_tts.html">Voxtral TTS</a></li>
 <li class="toctree-l1"><a class="reference internal" href="fishaudio_s2_pro.html">Fish Audio S2-Pro</a></li>
+<li class="toctree-l1"><a class="reference internal" href="fishaudio_drama3.html">Fish Audio Drama 3</a></li>
 <li class="toctree-l1"><a class="reference internal" href="qwen3_tts.html">Qwen3 TTS</a></li>
 <li class="toctree-l1"><a class="reference internal" href="ming_tts.html">Ming-Omni-TTS</a></li>
 <li class="toctree-l1"><a class="reference internal" href="moss_tts.html">MOSS-TTS</a></li>
@@ -266,8 +268,13 @@
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/reference_encode_service.html">Reference Encode Service</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/profiler.html">Request-level profiler</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/qwen3_asr_concurrency_profile.html">Qwen3-ASR High-Concurrency Benchmark and Bottleneck Profile</a></li>
-<li class="toctree-l1"><a class="reference internal" href="../developer_reference/full_duplex_bench.html">Full-Duplex-Bench v1.5 runbook</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_reference/full_duplex_bench.html">Full-Duplex-Bench runbook</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_reference/full_duplex_metrics.html">Full-Duplex-Bench v1.0 unified metrics</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_reference/tts_bench.html">TTS benchmark runbook</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_reference/asr_bench.html">ASR benchmark runbook</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_reference/omni_offline_bench.html">MiniCPM-o offline benchmark runbook</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/rl_admin_control.html">RL Admin Control</a></li>
+<li class="toctree-l1"><a class="reference internal" href="../developer_reference/mlx.html">MLX Path</a></li>
 <li class="toctree-l1"><a class="reference internal" href="../developer_reference/bump_version.html">Bumping the SGLang Pin</a></li>
 </ul>
 
@@ -506,11 +513,14 @@
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#running-the-offline-example">Running the offline example</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#serving-over-http">Serving over HTTP</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#request-parameters">Request parameters</a><ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#explicit-stage-sampling">Explicit stage sampling</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#stage-sampling">Stage sampling</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#known-limitations">Known limitations</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#tests">Tests</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#tests">Tests</a><ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#reference-parity">Reference parity</a></li>
+</ul>
+</li>
 </ul>
             </nav>
         </div>
@@ -586,7 +596,7 @@
 <td><p>The role prompt, wrapped in <code class="docutils literal notranslate"><span class="pre">&lt;system&gt;</span></code> tags. Default: the reference assistant prompt.</p></td>
 </tr>
 <tr class="row-even"><td><p><code class="docutils literal notranslate"><span class="pre">temperature</span></code>, <code class="docutils literal notranslate"><span class="pre">top_k</span></code></p></td>
-<td><p>Text sampling; defaults 0.7 / 25, which the client’s filler values (1.0 / -1) do not override unless set explicitly. <code class="docutils literal notranslate"><span class="pre">temperature=0</span></code> is greedy.</p></td>
+<td><p>Text sampling, defaults 0.7 / 25. <code class="docutils literal notranslate"><span class="pre">temperature=0</span></code> is greedy.</p></td>
 </tr>
 <tr class="row-odd"><td><p><code class="docutils literal notranslate"><span class="pre">audio_temperature</span></code>, <code class="docutils literal notranslate"><span class="pre">audio_top_k</span></code></p></td>
 <td><p>Code sampling in the depformer; defaults 0.8 / 250.</p></td>
@@ -600,18 +610,13 @@
 </tbody>
 </table>
 </div>
-<section id="explicit-stage-sampling">
-<h3>Explicit stage sampling<a class="headerlink" href="#explicit-stage-sampling" title="Link to this heading">#</a></h3>
-<p>HTTP chat and rollout requests preserve which fields were provided in
-<code class="docutils literal notranslate"><span class="pre">stage_sampling.lm</span></code>. For example, <code class="docutils literal notranslate"><span class="pre">{&quot;seed&quot;:</span> <span class="pre">7}</span></code> keeps the PersonaPlex text
-defaults (temperature 0.7, top-k 25), while
-<code class="docutils literal notranslate"><span class="pre">{&quot;temperature&quot;:</span> <span class="pre">1.0,</span> <span class="pre">&quot;top_k&quot;:</span> <span class="pre">-1}</span></code> explicitly selects temperature 1.0 and
-disables top-k filtering. In-process stage <code class="docutils literal notranslate"><span class="pre">SamplingParams</span></code> objects are complete configurations:
-all serialized fields are explicit. Thus <code class="docutils literal notranslate"><span class="pre">SamplingParams(seed=7)</span></code> in
-<code class="docutils literal notranslate"><span class="pre">stage_sampling.lm</span></code> selects temperature 1.0 and top-k -1 as well as seed 7.
-To keep PersonaPlex text defaults, omit <code class="docutils literal notranslate"><span class="pre">stage_sampling</span></code> and set the seed in
-the top-level <code class="docutils literal notranslate"><span class="pre">sampling=SamplingParams(seed=7)</span></code> instead. Top-level client
-filler handling is unchanged.</p>
+<section id="stage-sampling">
+<h3>Stage sampling<a class="headerlink" href="#stage-sampling" title="Link to this heading">#</a></h3>
+<p>Fields left out of <code class="docutils literal notranslate"><span class="pre">stage_sampling.lm</span></code> keep the PersonaPlex text defaults.
+For example, <code class="docutils literal notranslate"><span class="pre">{&quot;seed&quot;:</span> <span class="pre">7}</span></code> keeps temperature 0.7 and top-k 25, while
+<code class="docutils literal notranslate"><span class="pre">{&quot;temperature&quot;:</span> <span class="pre">1.0,</span> <span class="pre">&quot;top_k&quot;:</span> <span class="pre">-1}</span></code> samples at temperature 1.0 with no top-k
+filtering. The same holds for <code class="docutils literal notranslate"><span class="pre">SamplingParams</span></code> objects passed to the Python
+client: <code class="docutils literal notranslate"><span class="pre">SamplingParams(seed=7)</span></code> in <code class="docutils literal notranslate"><span class="pre">stage_sampling.lm</span></code> sets only the seed.</p>
 <p>Text sampling uses <code class="docutils literal notranslate"><span class="pre">stage_sampling.lm</span></code>, then <code class="docutils literal notranslate"><span class="pre">stage_params.lm</span></code>, then top-level
 request values. Stage sampling also takes precedence for <code class="docutils literal notranslate"><span class="pre">seed</span></code>.
 <code class="docutils literal notranslate"><span class="pre">top_p</span></code>, <code class="docutils literal notranslate"><span class="pre">min_p</span></code>, and <code class="docutils literal notranslate"><span class="pre">repetition_penalty</span></code> apply to the text sampler only;
@@ -622,9 +627,11 @@ The fixed caller-frame budget still determines the number of generated frames.</
 <section id="known-limitations">
 <h2>Known limitations<a class="headerlink" href="#known-limitations" title="Link to this heading">#</a></h2>
 <ul class="simple">
-<li><p>Offline, one request at a time by default (<code class="docutils literal notranslate"><span class="pre">max_running_requests=1</span></code>). If you raise <code class="docutils literal notranslate"><span class="pre">--lm.engine.max_running_requests</span></code>, unseeded requests with the same audio sampling share one depformer pass per frame.</p></li>
-<li><p>CUDA graphs are off; a 7B decode step plus 8 depformer steps runs close to the 80 ms frame budget rather than well inside it.</p></li>
+<li><p>Offline, one request at a time by default (<code class="docutils literal notranslate"><span class="pre">max_running_requests=1</span></code>). If you raise <code class="docutils literal notranslate"><span class="pre">--lm.engine.max_running_requests</span></code>, the requests in a batch share one depformer pass per frame, and each seeded request still draws from its own generator. A seeded reply repeats exactly only with one request in flight, because batched kernels can round differently.</p></li>
+<li><p>On CUDA the backbone’s decode step replays a CUDA graph (<code class="docutils literal notranslate"><span class="pre">--lm.engine.disable_cuda_graph</span> <span class="pre">true</span></code> turns it off); the 8 depformer steps still run eagerly, so a frame runs close to the 80 ms budget rather than well inside it.</p></li>
+<li><p>On CUDA, streaming Mimi decode replays CUDA graphs for chunks of 1 to <code class="docutils literal notranslate"><span class="pre">max_graph_frames</span></code> frames on <code class="docutils literal notranslate"><span class="pre">num_decode_slots</span></code> resident decode states (default 8); other platforms decode eagerly. When unset, <code class="docutils literal notranslate"><span class="pre">max_graph_frames</span></code> follows the widest entry in <code class="docutils literal notranslate"><span class="pre">chunk_ramp_frames</span></code> (default <code class="docutils literal notranslate"><span class="pre">[1,</span> <span class="pre">4]</span></code>: the first frame alone, then four at a time), covering both regular chunks and shorter final chunks. Each decode handles one request; slots hold independent request states, not a decode batch. A stream that arrives while every slot is taken decodes eagerly, so keep <code class="docutils literal notranslate"><span class="pre">--code2wav.factory.num_decode_slots</span></code> at or above <code class="docutils literal notranslate"><span class="pre">--lm.engine.max_running_requests</span></code>; an explicit <code class="docutils literal notranslate"><span class="pre">--code2wav.factory.max_graph_frames</span> <span class="pre">N</span></code> overrides the graph limit, and <code class="docutils literal notranslate"><span class="pre">0</span></code> turns the graphs off.</p></li>
 <li><p>The temporal attention window follows the streaming ring, including the masked oldest slot once its 3000-position cache fills. Boundary tests check this rule; they do not measure long-input audio quality.</p></li>
+<li><p>On a CUDA platform with resolved <code class="docutils literal notranslate"><span class="pre">device=cuda</span></code>, <code class="docutils literal notranslate"><span class="pre">page_size=1</span></code> and radix caching disabled (the default), window KV releases expired positions for reuse. Steady decode holds about 3.1k positions (1.5 GiB of BF16 KV) per long request with the default eviction interval; prefill and retract replay can temporarily hold more. CPU stages, other platforms, page sizes and radix-enabled configurations use the full KV pool. Context and request-length limits remain unchanged, and returning slots does not shrink the preallocated pool. Set <code class="docutils literal notranslate"><span class="pre">--lm.engine.disable_hybrid_swa_memory</span> <span class="pre">true</span></code> to use the full pool explicitly.</p></li>
 </ul>
 </section>
 <section id="tests">
@@ -633,12 +640,27 @@ The fixed caller-frame budget still determines the number of generated frames.</
 <div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>pytest<span class="w"> </span>tests/unit_test/personaplex/<span class="w"> </span>-q
 </pre></div>
 </div>
-<p>Reference comparisons and reproducibility checks are evaluation scripts under
-<code class="docutils literal notranslate"><span class="pre">benchmarks/eval/</span></code>, separate from the unit suite. See the
-<span class="xref myst">PersonaPlex evaluation guide</span> for checkpoint,
-reference-environment and output setup. The greedy comparison checks a matching
-prefix, not full-output equality; the component comparison includes a diagnostic
-for the reference depformer ring behavior.</p>
+<section id="reference-parity">
+<h3>Reference parity<a class="headerlink" href="#reference-parity" title="Link to this heading">#</a></h3>
+<p>Two opt-in tests compare against an <a class="reference external" href="https://github.com/NVIDIA/personaplex">NVIDIA/personaplex</a> checkout. Its <code class="docutils literal notranslate"><span class="pre">moshi</span></code> package pins <code class="docutils literal notranslate"><span class="pre">torch</span> <span class="pre">&lt;</span> <span class="pre">2.5</span></code>, so it needs its own environment, separate from the serving one:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span>git<span class="w"> </span>clone<span class="w"> </span>https://github.com/NVIDIA/personaplex.git<span class="w"> </span>/path/to/personaplex
+uv<span class="w"> </span>venv<span class="w"> </span>/path/to/personaplex/.venv<span class="w"> </span>-p<span class="w"> </span><span class="m">3</span>.12
+uv<span class="w"> </span>pip<span class="w"> </span>install<span class="w"> </span>--python<span class="w"> </span>/path/to/personaplex/.venv/bin/python<span class="w"> </span>/path/to/personaplex/moshi/
+</pre></div>
+</div>
+<p>Then run the tests from the serving environment. They need CUDA, skip unless both variables are set, and run one file per command:</p>
+<div class="highlight-bash notranslate"><div class="highlight"><pre><span></span><span class="nb">export</span><span class="w"> </span><span class="nv">PERSONAPLEX_REFERENCE_SOURCE</span><span class="o">=</span>/path/to/personaplex
+<span class="nb">export</span><span class="w"> </span><span class="nv">PERSONAPLEX_REFERENCE_PYTHON</span><span class="o">=</span>/path/to/personaplex/.venv/bin/python
+python<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> </span>tests/test_model/test_personaplex_parity.py<span class="w"> </span>-v<span class="w"> </span>-s
+python<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> </span>tests/test_model/test_personaplex_components.py<span class="w"> </span>-v<span class="w"> </span>-s
+</pre></div>
+</div>
+<ul class="simple">
+<li><p><code class="docutils literal notranslate"><span class="pre">test_personaplex_parity.py</span></code>: greedy replies to the reference’s two test recordings must have the input’s length, match it for at least the first 100 frames, and agree in text over that prefix; greedy and seeded replies must also repeat. <strong>This is not full-output parity.</strong></p></li>
+<li><p><code class="docutils literal notranslate"><span class="pre">test_personaplex_components.py</span></code>: Mimi, the input embeddings and the depformer logits on the public <code class="docutils literal notranslate"><span class="pre">kyutai/moshiko-pytorch-bf16</span></code> base. The last depformer step matches only with the reference’s ring behavior emulated, which diagnoses a known difference rather than proving a match.</p></li>
+</ul>
+<p><code class="docutils literal notranslate"><span class="pre">PERSONAPLEX_PARITY_CHECKPOINT</span></code> and <code class="docutils literal notranslate"><span class="pre">PERSONAPLEX_MOSHI_CHECKPOINT</span></code> override the checkpoints, <code class="docutils literal notranslate"><span class="pre">PERSONAPLEX_STAGE_ARGS</span></code> forwards pipeline flags such as <code class="docutils literal notranslate"><span class="pre">'--lm.engine.mem_fraction_static</span> <span class="pre">0.5'</span></code>, and <code class="docutils literal notranslate"><span class="pre">PERSONAPLEX_REFERENCE_REPO</span></code> sets the reference CLI’s config lookup. Reference outputs are regenerated on every run under pytest’s temporary directory.</p>
+</section>
 </section>
 </section>
 
@@ -693,11 +715,14 @@ for the reference depformer ring behavior.</p>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#running-the-offline-example">Running the offline example</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#serving-over-http">Serving over HTTP</a></li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#request-parameters">Request parameters</a><ul class="pst-show_toc_level nav section-nav flex-column">
-<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#explicit-stage-sampling">Explicit stage sampling</a></li>
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#stage-sampling">Stage sampling</a></li>
 </ul>
 </li>
 <li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#known-limitations">Known limitations</a></li>
-<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#tests">Tests</a></li>
+<li class="toc-h2 nav-item toc-entry"><a class="reference internal nav-link" href="#tests">Tests</a><ul class="pst-show_toc_level nav section-nav flex-column">
+<li class="toc-h3 nav-item toc-entry"><a class="reference internal nav-link" href="#reference-parity">Reference parity</a></li>
+</ul>
+</li>
 </ul>
   </nav></div>
 
@@ -731,7 +756,7 @@ By SGLang-Omni Team
   
   <div class="footer-item">
     <p class="last-updated">
-  Last updated on Oct 10, 2026.
+  Last updated on Oct 15, 2026.
   <br/>
 </p>
   </div>
