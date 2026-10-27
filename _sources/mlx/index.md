@@ -7,7 +7,7 @@ Rules for Apple Silicon work. They write down what the native runtime PRs under
 
 | Path | Contents |
 | --- | --- |
-| `sglang_omni_mlx/native/` | C++ runtime on MLX: one server binary per model, a parity CLI per model in `tools/`, shared code in `src/layers`, `src/swift_port`, `src/asr_service`. |
+| `sglang_omni_mlx/native/` | C++ runtime on MLX: one server binary per model, a parity CLI per model in `tools/`. Each model's code is in `src/<model>/`; code shared across models (`audio`, `form`, `layers`, `npz`, `tokenizer`, built as the `common` library, plus `swift_port` and `http`) is in `src/common/`. The shared ASR server code (`asr_service`, `worker`, `realtime`) is still in `src/qwen3_asr/`. |
 | `sglang_omni_mlx/native/ci/` | Model pins, the 392-clip corpus, golden outputs, server API tests. |
 | `sglang_omni_mlx/<model>/` | Python MLX servers, e.g. the Qwen3-ASR reference server. |
 | `Voxt/` | The macOS app that runs the native servers. See [`Voxt/backend/README.md`](https://github.com/sgl-project/sglang-omni/blob/main/Voxt/backend/README.md). |
@@ -21,7 +21,7 @@ MLX code is not abstracted together with the CUDA path in `sglang_omni`.
 - No shared backend interface, base class or registry across the two paths.
   Share code freely inside the MLX path, not across paths.
 - The paths meet only at the OpenAI-style HTTP API (`/v1/audio/transcriptions`,
-  `/v1/realtime`, `/health`).
+  `/v1/audio/speech`, `/v1/realtime`, `/health`).
 
 Why:
 
@@ -44,8 +44,13 @@ agree on it with a maintainer first.
 
 **Placement and reuse**
 
-- A native model adds `<model>_model`, `<model>_transcriber`, a server on the
-  shared `asr_service`, a CLI in `tools/`, and CMake targets.
+- A native model adds `src/<model>/` with `<model>_model`, `<model>_transcriber`
+  and a server on the shared `asr_service`, a CLI in `tools/`, and CMake
+  targets: a library for the model's own sources that links what it reuses
+  (`common`, `swift_port`, `silero_vad`, `sortformer`). Shared code goes in
+  `src/common/`, not in another model's directory or library. Include project
+  headers by their path under `src/`, e.g. `#include "common/layers.h"`.
+- Shared audio, checkpoint/layer, tokenizer and multipart APIs use the `omni_common` namespace and the `common` library. HTTP helpers use `omni_server` and the `common_http` library; neither library depends on a model. Qwen3-ASR audio layouts, log-mel extraction and encoder token counts belong to `qwen3_asr/qwen3_audio.h`. Shared decoder and ASR serving types still live under `qwen3_asr/`; their extraction is separate from the common primitive APIs.
 - Reuse `layers`, `swift_port`, the Sortformer front end and the Silero VAD
   port. If your code duplicates something on `main`, move it into the shared
   file in the same PR.
@@ -65,14 +70,17 @@ agree on it with a maintainer first.
 
 - Pin every checkpoint file by revision and SHA-256 in `ci/model_pins.json`.
 - Add a golden under `ci/model_golden/`. Import the Mac CI runner's outputs
-  (`golden-outputs` artifact, `--import`) so the runner checks exactly.
+  (`golden-outputs` artifact, `--import`) so the runner checks exactly. A
+  speech model's golden holds seeded requests' codes (`ci/voxtral_golden.py`).
 - Add a second golden for paths the corpus misses (long-audio chunking, VAD).
 
 **Tests**
 
-- Server tests in `ci/test_model_servers.py`: JSON, SSE and realtime success
-  paths; every invalid input returns 400; session-state errors, cancel on
-  disconnect, and wrong model kind.
+- Server tests in `ci/test_model_servers.py`, or in the model's own
+  `ci/test_<model>_api.py` added to the Mac CI job once that file would pass
+  ~400 lines: JSON, SSE and realtime success paths; every invalid input
+  returns 400; session-state errors, cancel on disconnect, and wrong model
+  kind.
 - Assert structure, not one chip's exact text; exact text lives in the golden.
 - New Voxt Omni tests go into the `voxt-unit` job in `voxt-mac-ci.yaml`.
 
@@ -91,8 +99,8 @@ agree on it with a maintainer first.
 
 **CI and style**
 
-- Target `main` (stacked PRs get no Mac CI), non-draft, with the `run-ci`
-  label. Both Mac CI jobs must pass on a real run.
+- Target `main` (stacked PRs get no Mac CI), non-draft, with the `run-mac-ci`
+  or `run-all-ci` label. Both Mac CI jobs must pass on a real run.
 - Run pre-commit and follow
   [coding-style.md](https://github.com/sgl-project/sglang-omni/blob/main/.claude/skills/code-review/coding-style.md).
 - Update `Voxt/backend/README.md`. Follow the PR format of
